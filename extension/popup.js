@@ -1,0 +1,351 @@
+const EXPORT_REQUEST_SIZE = 200;
+const MAX_TOTAL_PGN_BYTES = 20 * 1024 * 1024;
+
+const elements = {
+  hostBadge: document.querySelector("#hostBadge"),
+  settings: document.querySelector("#settings"),
+  settingsForm: document.querySelector("#settingsForm"),
+  scidExecutable: document.querySelector("#scidExecutable"),
+  databaseBase: document.querySelector("#databaseBase"),
+  saveSettings: document.querySelector("#saveSettings"),
+  searchForm: document.querySelector("#searchForm"),
+  player: document.querySelector("#player"),
+  search: document.querySelector("#search"),
+  status: document.querySelector("#status"),
+  candidateSection: document.querySelector("#candidateSection"),
+  candidates: document.querySelector("#candidates"),
+  resultsSection: document.querySelector("#resultsSection"),
+  games: document.querySelector("#games"),
+  selectAll: document.querySelector("#selectAll"),
+  selectNone: document.querySelector("#selectNone"),
+  loadMore: document.querySelector("#loadMore"),
+  downloadPgn: document.querySelector("#downloadPgn"),
+  copyPgn: document.querySelector("#copyPgn")
+};
+
+const state = {
+  ready: false,
+  busy: false,
+  player: "",
+  total: 0,
+  nextCursor: null,
+  games: [],
+  selected: new Set()
+};
+
+async function nativeRequest(command, payload = {}) {
+  const response = await chrome.runtime.sendMessage({
+    type: "native-request",
+    command,
+    payload
+  });
+  if (!response?.ok) {
+    const error = new Error(response?.error?.message ?? "The native helper did not respond.");
+    error.code = response?.error?.code ?? "NATIVE_HOST_ERROR";
+    throw error;
+  }
+  return response;
+}
+
+function setStatus(message) {
+  elements.status.textContent = message;
+}
+
+function setBusy(busy) {
+  state.busy = busy;
+  elements.saveSettings.disabled = busy;
+  elements.search.disabled = busy || !state.ready;
+  elements.loadMore.disabled = busy;
+  updateExportButtons();
+}
+
+function setHostBadge(label, kind = "") {
+  elements.hostBadge.textContent = label;
+  elements.hostBadge.className = `badge ${kind}`.trim();
+}
+
+function updateExportButtons() {
+  const disabled = state.busy || state.selected.size === 0;
+  elements.downloadPgn.disabled = disabled;
+  elements.copyPgn.disabled = disabled;
+}
+
+function resetResults() {
+  state.total = 0;
+  state.nextCursor = null;
+  state.games = [];
+  state.selected.clear();
+  elements.games.replaceChildren();
+  elements.resultsSection.classList.add("hidden");
+  elements.loadMore.classList.add("hidden");
+  updateExportButtons();
+}
+
+function renderCandidates(candidates) {
+  elements.candidates.replaceChildren();
+  elements.candidateSection.classList.toggle("hidden", candidates.length === 0);
+
+  for (const candidate of candidates) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${candidate.name} (${candidate.frequency})`;
+    button.addEventListener("click", () => {
+      elements.player.value = candidate.name;
+      void searchPlayer(candidate.name, false);
+    });
+    elements.candidates.append(button);
+  }
+}
+
+function appendGames(games) {
+  for (const game of games) {
+    if (state.games.some((existing) => existing.gameNumber === game.gameNumber)) {
+      continue;
+    }
+    state.games.push(game);
+    state.selected.add(game.gameNumber);
+
+    const row = document.createElement("tr");
+    const selectedCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "game-check";
+    checkbox.checked = true;
+    checkbox.dataset.gameNumber = String(game.gameNumber);
+    checkbox.setAttribute("aria-label", `Select game ${game.gameNumber}`);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        state.selected.add(game.gameNumber);
+      } else {
+        state.selected.delete(game.gameNumber);
+      }
+      updateExportButtons();
+    });
+    selectedCell.append(checkbox);
+    row.append(selectedCell);
+
+    for (const value of [
+      game.date ?? "—",
+      playerWithElo(game.white, game.whiteElo),
+      playerWithElo(game.black, game.blackElo),
+      game.result ?? "—",
+      game.event ?? "—"
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    elements.games.append(row);
+  }
+  elements.resultsSection.classList.toggle("hidden", state.games.length === 0);
+  updateExportButtons();
+}
+
+function playerWithElo(name, elo) {
+  if (!name) return "—";
+  return elo ? `${name} (${elo})` : name;
+}
+
+async function refreshStatus() {
+  try {
+    const response = await nativeRequest("status");
+    state.ready = response.ready === true;
+    if (response.scidExecutable) elements.scidExecutable.value = response.scidExecutable;
+    if (response.databaseBase) elements.databaseBase.value = response.databaseBase;
+
+    if (state.ready) {
+      setHostBadge("Ready", "ready");
+      setStatus(`Using ${response.databaseLabel}.`);
+      elements.settings.open = false;
+    } else {
+      setHostBadge(response.configured ? "Needs attention" : "Setup required", "error");
+      setStatus("Configure the Scid executable and database before searching.");
+      elements.settings.open = true;
+    }
+  } catch {
+    state.ready = false;
+    setHostBadge("Helper unavailable", "error");
+    setStatus("Install and register the native helper, then reopen Chrome.");
+    elements.settings.open = true;
+  }
+  elements.search.disabled = state.busy || !state.ready;
+}
+
+async function searchPlayer(player, append) {
+  if (!state.ready || state.busy) return;
+  const trimmed = player.trim();
+  if (!trimmed) {
+    setStatus("Enter a player name.");
+    return;
+  }
+
+  if (!append) {
+    resetResults();
+    renderCandidates([]);
+    state.player = trimmed;
+  }
+
+  setBusy(true);
+  setStatus(append ? "Loading more games…" : "Searching the local database…");
+  try {
+    const response = await nativeRequest("searchPlayer", {
+      player: trimmed,
+      limit: 100,
+      cursor: append ? state.nextCursor : 0
+    });
+
+    if (response.playerNotFound) {
+      setStatus("No matching player name was found.");
+      return;
+    }
+    if (response.requiresPlayerChoice) {
+      renderCandidates(response.candidates ?? []);
+      setStatus("Choose the exact player before searching games.");
+      return;
+    }
+
+    renderCandidates([]);
+    state.player = response.selectedPlayer ?? trimmed;
+    state.total = response.total ?? 0;
+    state.nextCursor = response.nextCursor ?? null;
+    appendGames(response.games ?? []);
+    elements.loadMore.classList.toggle("hidden", state.nextCursor === null);
+    setStatus(`Showing ${state.games.length} of ${state.total} games for ${state.player}.`);
+    await chrome.storage.local.set({ player: state.player });
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function collectSelectedPgn() {
+  let pending = state.games
+    .filter((game) => state.selected.has(game.gameNumber))
+    .map((game) => game.gameNumber);
+  const total = pending.length;
+  const chunks = [];
+  let bytes = 0;
+
+  while (pending.length > 0) {
+    const requestBatch = pending.slice(0, EXPORT_REQUEST_SIZE);
+    const untouched = pending.slice(EXPORT_REQUEST_SIZE);
+    const response = await nativeRequest("getPgn", { gameNumbers: requestBatch });
+    if (!Array.isArray(response.games) || response.games.length === 0) {
+      throw new Error("The helper returned no PGN data.");
+    }
+
+    for (const game of response.games) {
+      const text = `${game.pgn.trim()}\n`;
+      bytes += new TextEncoder().encode(text).byteLength;
+      if (bytes > MAX_TOTAL_PGN_BYTES) {
+        throw new Error("The selected PGN export is larger than 20 MB. Select fewer games.");
+      }
+      chunks.push(text);
+    }
+
+    pending = [...(response.remainingGameNumbers ?? []), ...untouched];
+    setStatus(`Exporting PGN… ${total - pending.length}/${total}`);
+  }
+
+  return `${chunks.join("\n").trim()}\n`;
+}
+
+function exportFilename() {
+  const safePlayer = (state.player || "chess-games")
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase()
+    .slice(0, 60) || "chess-games";
+  return `${safePlayer}-${new Date().toISOString().slice(0, 10)}.pgn`;
+}
+
+async function downloadPgn(pgn) {
+  const url = URL.createObjectURL(new Blob([pgn], { type: "application/x-chess-pgn" }));
+  try {
+    await chrome.downloads.download({ url, filename: exportFilename(), saveAs: true });
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+}
+
+elements.settingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setBusy(true);
+  setStatus("Verifying local paths…");
+  try {
+    const response = await nativeRequest("configure", {
+      scidExecutable: elements.scidExecutable.value.trim(),
+      databaseBase: elements.databaseBase.value.trim()
+    });
+    state.ready = response.ready === true;
+    setHostBadge(state.ready ? "Ready" : "Needs attention", state.ready ? "ready" : "error");
+    setStatus(state.ready ? `Using ${response.databaseLabel}.` : "The configuration is not ready.");
+    elements.settings.open = !state.ready;
+  } catch (error) {
+    state.ready = false;
+    setHostBadge("Needs attention", "error");
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+});
+
+elements.searchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void searchPlayer(elements.player.value, false);
+});
+
+elements.loadMore.addEventListener("click", () => {
+  if (state.nextCursor !== null) void searchPlayer(state.player, true);
+});
+
+elements.selectAll.addEventListener("click", () => {
+  state.selected = new Set(state.games.map((game) => game.gameNumber));
+  document.querySelectorAll(".game-check").forEach((checkbox) => {
+    checkbox.checked = true;
+  });
+  updateExportButtons();
+});
+
+elements.selectNone.addEventListener("click", () => {
+  state.selected.clear();
+  document.querySelectorAll(".game-check").forEach((checkbox) => {
+    checkbox.checked = false;
+  });
+  updateExportButtons();
+});
+
+elements.downloadPgn.addEventListener("click", async () => {
+  setBusy(true);
+  try {
+    const pgn = await collectSelectedPgn();
+    await downloadPgn(pgn);
+    setStatus(`Prepared ${state.selected.size} games as ${exportFilename()}.`);
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+});
+
+elements.copyPgn.addEventListener("click", async () => {
+  setBusy(true);
+  try {
+    const pgn = await collectSelectedPgn();
+    await navigator.clipboard.writeText(pgn);
+    setStatus(`Copied ${state.selected.size} games as PGN.`);
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+});
+
+chrome.storage.local.get(["player"], (saved) => {
+  elements.player.value = saved.player ?? "";
+});
+
+updateExportButtons();
+void refreshStatus();

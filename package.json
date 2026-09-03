@@ -1,0 +1,9 @@
+{
+  "name": "lubras-chess-genie",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node --check extension/service-worker.js && node --check extension/popup.js && node extension/tests/verify.mjs && python3 -m unittest discover -s native-host/tests -v"
+  }
+}

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LubrasChessGenie</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>LubrasChessGenie</h1>
+          <p class="subtitle">Search a local Scid database and export ordinary PGN.</p>
+        </div>
+        <span id="hostBadge" class="badge">Checking…</span>
+      </header>
+
+      <details id="settings">
+        <summary>Local database settings</summary>
+        <form id="settingsForm" class="form-grid">
+          <label for="scidExecutable">Scid executable</label>
+          <input
+            id="scidExecutable"
+            type="text"
+            placeholder="/Applications/Scid.app/Contents/scid/scid"
+            autocomplete="off"
+            required
+          >
+
+          <label for="databaseBase">Scid database base path</label>
+          <input
+            id="databaseBase"
+            type="text"
+            placeholder="/Users/me/Desktop/database/name"
+            autocomplete="off"
+            required
+          >
+          <p class="hint">Use the common path without .si5, .sg5, or .sn5.</p>
+
+          <button id="saveSettings" type="submit">Save and verify</button>
+        </form>
+      </details>
+
+      <section id="searchSection" aria-labelledby="searchHeading">
+        <h2 id="searchHeading">Find a player</h2>
+        <form id="searchForm" class="search-row">
+          <input
+            id="player"
+            type="search"
+            placeholder="Surname, Given name"
+            autocomplete="off"
+            aria-label="Player name"
+            required
+          >
+          <button id="search" type="submit">Search</button>
+        </form>
+      </section>
+
+      <p id="status" role="status" aria-live="polite"></p>
+
+      <section id="candidateSection" class="hidden" aria-labelledby="candidateHeading">
+        <h2 id="candidateHeading">Choose the exact player</h2>
+        <div id="candidates" class="candidate-list"></div>
+      </section>
+
+      <section id="resultsSection" class="hidden" aria-labelledby="resultsHeading">
+        <div class="section-heading">
+          <h2 id="resultsHeading">Games</h2>
+          <div class="small-actions">
+            <button id="selectAll" type="button" class="link-button">Select all</button>
+            <button id="selectNone" type="button" class="link-button">Select none</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th aria-label="Selected"></th>
+                <th>Date</th>
+                <th>White</th>
+                <th>Black</th>
+                <th>Result</th>
+                <th>Event</th>
+              </tr>
+            </thead>
+            <tbody id="games"></tbody>
+          </table>
+        </div>
+
+        <button id="loadMore" type="button" class="secondary hidden">Load more</button>
+
+        <div class="export-actions">
+          <button id="downloadPgn" type="button">Download PGN</button>
+          <button id="copyPgn" type="button" class="secondary">Copy PGN</button>
+        </div>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

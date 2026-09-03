@@ -1,0 +1,9 @@
+{
+  "name": "app.chessgenie.local_games",
+  "description": "Read-only local Scid database search and PGN export",
+  "path": "__HOST_LAUNCHER__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

@@ -1,0 +1,13 @@
+.DS_Store
+node_modules/
+dist/
+*.log
+__pycache__/
+*.pyc
+
+# Never commit local databases or proof exports.
+*.si5
+*.sg5
+*.sn5
+proof-output/
+*.proof.pgn

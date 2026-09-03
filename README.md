@@ -11,6 +11,7 @@ standard PGN.
 - Shows the stored player name for games found by FIDE ID.
 - Shows matching games with date, players, ratings, result, event, and ECO.
 - Exports every matching game, without paging through the results first.
+- Produces standard PGN that works with Chess Genie's Prepare functionality.
 - Downloads selected games as a `.pgn` file.
 - Copies selected PGN to the clipboard.
 - Keeps the database local and opens it read-only.
@@ -167,12 +168,22 @@ had White or Black, and each game is listed once.
 FIDE ID searches take longer than name searches because Scid scans the
 `WhiteFideId` and `BlackFideId` tags of every game instead of using the name
 index. On a database of about 10 million games, a FIDE ID search takes roughly
-13 seconds, and each **Load more** repeats the search for the next page.
+13 seconds. That cost is paid once per search: loading further games and
+exporting them look up games by number and do not scan the tags again.
 Everything runs against the local database; no FIDE website or other network
 service is used.
 
-The resulting PGN is a standard text format that can be opened or imported by
-chess software that supports PGN.
+## Using the games with Chess Genie
+
+The export is ordinary PGN, so it is compatible with Chess Genie's Prepare
+functionality: give it the downloaded `.pgn` file, or the PGN text placed on the
+clipboard by **Copy PGN**. Preparing against a specific opponent is the usual
+reason to search by FIDE ID, because an ID identifies one player even when the
+database stores their name inconsistently.
+
+Nothing about this hand-off is Chess Genie specific. The same file opens in any
+chess software that reads PGN, and the extension neither uploads games nor talks
+to any website.
 
 ## Troubleshooting
 

@@ -35,6 +35,9 @@ const state = {
   total: 0,
   nextCursor: null,
   games: [],
+  // Every matching game number, not only the rendered page, so an export can
+  // cover the whole result set.
+  resultNumbers: [],
   selected: new Set()
 };
 
@@ -79,6 +82,7 @@ function resetResults() {
   state.total = 0;
   state.nextCursor = null;
   state.games = [];
+  state.resultNumbers = [];
   state.selected.clear();
   elements.games.replaceChildren();
   elements.resultsSection.classList.add("hidden");
@@ -108,14 +112,13 @@ function appendGames(games) {
       continue;
     }
     state.games.push(game);
-    state.selected.add(game.gameNumber);
 
     const row = document.createElement("tr");
     const selectedCell = document.createElement("td");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "game-check";
-    checkbox.checked = true;
+    checkbox.checked = state.selected.has(game.gameNumber);
     checkbox.dataset.gameNumber = String(game.gameNumber);
     checkbox.setAttribute("aria-label", `Select game ${game.gameNumber}`);
     checkbox.addEventListener("change", () => {
@@ -144,6 +147,14 @@ function appendGames(games) {
   }
   elements.resultsSection.classList.toggle("hidden", state.games.length === 0);
   updateExportButtons();
+}
+
+// Prefer the full result set; fall back to rendered rows if the helper did
+// not report one.
+function exportableNumbers() {
+  return state.resultNumbers.length > 0
+    ? state.resultNumbers
+    : state.games.map((game) => game.gameNumber);
 }
 
 function playerWithElo(name, elo) {
@@ -234,9 +245,20 @@ async function runSearch(query, append) {
     }
     state.total = response.total ?? 0;
     state.nextCursor = response.nextCursor ?? null;
+    if (!append) {
+      state.resultNumbers = response.gameNumbers ?? [];
+      // Every match starts selected, including pages not rendered yet.
+      state.selected = new Set(exportableNumbers());
+    }
     appendGames(response.games ?? []);
     elements.loadMore.classList.toggle("hidden", state.nextCursor === null);
-    setStatus(`Showing ${state.games.length} of ${state.total} games for ${resultLabel()}.`);
+    let message =
+      `Showing ${state.games.length} of ${state.total} games for ${resultLabel()}. ` +
+      `${state.selected.size} selected for export.`;
+    if (state.resultNumbers.length > 0 && state.resultNumbers.length < state.total) {
+      message += ` Export covers the newest ${state.resultNumbers.length} games.`;
+    }
+    setStatus(message);
     await chrome.storage.local.set({
       player: query.kind === "fideId" ? query.fideId : state.player
     });
@@ -248,9 +270,10 @@ async function runSearch(query, append) {
 }
 
 async function collectSelectedPgn() {
-  let pending = state.games
-    .filter((game) => state.selected.has(game.gameNumber))
-    .map((game) => game.gameNumber);
+  let pending = exportableNumbers().filter((number) => state.selected.has(number));
+  if (pending.length === 0) {
+    throw new Error("Select at least one game to export.");
+  }
   const total = pending.length;
   const chunks = [];
   let bytes = 0;
@@ -330,7 +353,7 @@ elements.loadMore.addEventListener("click", () => {
 });
 
 elements.selectAll.addEventListener("click", () => {
-  state.selected = new Set(state.games.map((game) => game.gameNumber));
+  state.selected = new Set(exportableNumbers());
   document.querySelectorAll(".game-check").forEach((checkbox) => {
     checkbox.checked = true;
   });

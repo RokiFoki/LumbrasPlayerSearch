@@ -10,7 +10,8 @@ standard PGN.
 - Offers exact player choices when several names match a search.
 - Shows the stored player name for games found by FIDE ID.
 - Shows matching games with date, players, ratings, result, event, and ECO.
-- Loads large result sets in pages.
+- Loads large result sets in pages and exports every match, not only
+  the games on screen.
 - Downloads selected games as a `.pgn` file.
 - Copies selected PGN to the clipboard.
 - Keeps the database local and opens it read-only.
@@ -141,9 +142,16 @@ For example:
 4. If several stored names match a name search, select the desired player.
    A FIDE ID search skips this step and shows the stored player name with the
    results.
-5. Select the games to export.
+5. Select the games to export. Every match is selected by default, including
+   results on pages that are not shown yet; clear individual games or use
+   **Select none** to choose your own.
 6. Click **Download PGN** to save a `.pgn` file, or **Copy PGN** to place the
    PGN text on the clipboard.
+
+The table shows 100 games at a time, but an export covers the whole result set.
+Searching a player with 205 games and clicking **Download PGN** writes all 205,
+without pressing **Load more**. A single export is limited to 20 MB and to the
+newest 20,000 matches; the status line says so when a result set is larger.
 
 Input that consists only of digits is treated as a FIDE ID of up to 12 digits;
 anything else is treated as a player name. A FIDE ID must match the stored tag

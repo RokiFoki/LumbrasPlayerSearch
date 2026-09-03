@@ -12,6 +12,24 @@ proc requiredReadOnly {baseId} {
     }
 }
 
+# The complete newest-first result set, so the caller can export past the
+# current page. Bounded to keep the native response within its size ceiling.
+proc resultGameNumbers {baseId total} {
+    set maximum 20000
+    set numbers {}
+    if {$total <= 0} {
+        return $numbers
+    }
+    set wanted [expr {$total < $maximum ? $total : $maximum}]
+    foreach {index line deleted} [sc_base gameslist $baseId 0 $wanted dbfilter "N-"] {
+        set gameNumber [lindex [split $index "_"] 0]
+        if {[string is integer -strict $gameNumber]} {
+            lappend numbers $gameNumber
+        }
+    }
+    return $numbers
+}
+
 # Scid returns the extra PGN tags as one `Tag "value"' line per tag.
 proc extraTagValue {extraTags tagName} {
     foreach line [split $extraTags "\n"] {
@@ -95,6 +113,9 @@ try {
         }
     }
     puts "META\t$total\t$returned\t$examined"
+    if {$offset == 0} {
+        puts "NUMBERS\t[join [resultGameNumbers $baseId $total] ,]"
+    }
 } on error {message options} {
     puts stderr $message
     exit 1

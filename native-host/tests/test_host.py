@@ -37,6 +37,7 @@ class FakeAdapter:
                     "eco": "C42",
                 }
             ],
+            "gameNumbers": [42],
             "candidates": [{"name": player, "frequency": 1}],
             "requiresPlayerChoice": False,
             "playerNotFound": False,
@@ -62,6 +63,7 @@ class FakeAdapter:
                     "eco": "C42",
                 }
             ],
+            "gameNumbers": [7, 8],
             "candidates": [],
             "requiresPlayerChoice": False,
             "playerNotFound": False,
@@ -291,6 +293,17 @@ class HostTests(unittest.TestCase):
         self.assertEqual([game["gameNumber"] for game in exported["games"]], numbers)
         self.assertTrue(exported["games"][0]["pgn"].startswith('[Event "Example"]'))
         self.assertEqual(exported["remainingGameNumbers"], [])
+
+    def test_search_reports_every_match_not_only_the_page(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        response = native.dispatch(self.request("searchFideId", {"fideId": "1503014", "limit": 1}))
+        self.assertEqual(len(response["games"]), 1)
+        self.assertEqual(response["gameNumbers"], [7, 8])
+        # Every reported number is exportable through getPgn.
+        exported = native.dispatch(
+            self.request("getPgn", {"gameNumbers": response["gameNumbers"]})
+        )
+        self.assertEqual([game["gameNumber"] for game in exported["games"]], [7, 8])
 
     def test_export_rejects_duplicate_game_numbers(self):
         native = FakeNativeHost(host.ConfigStore(self.config_path))

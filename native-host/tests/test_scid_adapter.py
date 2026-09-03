@@ -262,6 +262,69 @@ class ScidAdapterParsingTests(unittest.TestCase):
             result = self.adapter.search_fide_id("1503014", 0, 100)
         self.assertEqual([game["gameNumber"] for game in result["games"]], [5])
 
+    def test_name_search_returns_the_complete_result_set(self):
+        output = "\n".join(
+            [
+                "CANDIDATE\t3\t{}".format(encoded("Player, Example")),
+                "GAME\t30\t{}".format("\t".join(encoded(v) for v in
+                    ["2026.01.02", "E", "1", "Player, Example", "Opponent", "1-0", "2500", "2400", "C42"])),
+                "META\t3\t1\t{}".format(encoded("Player, Example")),
+                "NUMBERS\t30,20,10",
+            ]
+        )
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            result = self.adapter.search_player("Player, Example", 0, 1)
+        # One page was rendered, but every match is exportable.
+        self.assertEqual([game["gameNumber"] for game in result["games"]], [30])
+        self.assertEqual(result["gameNumbers"], [30, 20, 10])
+
+    def test_fide_search_returns_the_complete_result_set(self):
+        output = "\n".join(
+            [
+                fide_game_line(30, "Player, Example", "Opponent", "1503014", "2"),
+                "META\t3\t1\t1",
+                "NUMBERS\t30,20,10",
+            ]
+        )
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            result = self.adapter.search_fide_id("1503014", 0, 1)
+        self.assertEqual([game["gameNumber"] for game in result["games"]], [30])
+        self.assertEqual(result["gameNumbers"], [30, 20, 10])
+
+    def test_later_pages_omit_the_result_set(self):
+        output = "\n".join(
+            [
+                fide_game_line(10, "Player, Example", "Opponent", "1503014", "2"),
+                "META\t3\t1\t1",
+            ]
+        )
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            result = self.adapter.search_fide_id("1503014", 2, 1)
+        self.assertEqual(result["gameNumbers"], [])
+
+    def test_result_set_is_bounded_and_skips_invalid_entries(self):
+        numbers = ",".join(str(n) for n in range(1, host.MAX_RESULT_GAME_NUMBERS + 500))
+        output = "META\t99999\t0\t0\nNUMBERS\t{}".format(numbers)
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            result = self.adapter.search_fide_id("1503014", 0, 100)
+        self.assertEqual(len(result["gameNumbers"]), host.MAX_RESULT_GAME_NUMBERS)
+
+        output = "META\t2\t0\t0\nNUMBERS\t5,,0,-3,7"
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            result = self.adapter.search_fide_id("1503014", 0, 100)
+        self.assertEqual(result["gameNumbers"], [5, 7])
+
+        output = "META\t2\t0\t0\nNUMBERS\t5,oops"
+        with mock.patch.object(self.adapter, "_run", return_value=output):
+            with self.assertRaises(host.HostError) as raised:
+                self.adapter.search_fide_id("1503014", 0, 100)
+        self.assertEqual(raised.exception.code, "SCID_OUTPUT_INVALID")
+
+    def test_no_result_search_has_an_empty_result_set(self):
+        with mock.patch.object(self.adapter, "_run", return_value="META\t0\t0\t0"):
+            result = self.adapter.search_fide_id("999999999", 0, 100)
+        self.assertEqual(result["gameNumbers"], [])
+
     def test_export_output_parsing(self):
         pgn = '[Event "Example"]\n\n1.e4 e5 1/2-1/2\n'
         output = "PGN\t42\t{}\n".format(encoded(pgn))

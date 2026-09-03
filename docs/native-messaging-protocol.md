@@ -60,9 +60,15 @@ The response contains bounded game metadata, not PGN bodies:
   "total": 3934,
   "selectedPlayer": "Carlsen, Magnus",
   "games": [],
+  "gameNumbers": [],
   "nextCursor": null
 }
 ```
+
+`games` holds one page of metadata. `gameNumbers` is sent only with the first
+page (`cursor` 0) and lists every matching game number in the same newest-first
+order, bounded to 20,000, so the caller can export beyond the page it renders.
+Later pages return it empty.
 
 If the query is not an exact stored player name, the host returns a bounded
 `candidates` list with `requiresPlayerChoice: true`; it does not silently choose
@@ -91,7 +97,8 @@ the same bounds as `searchPlayer`. The host searches the `WhiteFideId` and
 `BlackFideId` extra tags of the local database for the complete identifier,
 merges both sides without duplicates, and orders games newest first.
 
-The response has the same shape as `searchPlayer`, with `selectedPlayer` set to
+The response has the same shape as `searchPlayer`, including the first-page
+`gameNumbers` result set, with `selectedPlayer` set to
 the name most often stored beside the identifier and `fideId` echoing the
 normalized value. `candidates` is always empty and `requiresPlayerChoice`
 always `false`; `playerNotFound` is `true` when no game carries the ID:

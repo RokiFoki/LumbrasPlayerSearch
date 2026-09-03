@@ -120,4 +120,12 @@ assert.doesNotMatch(popupJs, /runSearch\(elements\.player/);
 // PGN export is untouched by the search mode.
 assert.match(popupJs, /nativeRequest\("getPgn", \{ gameNumbers: requestBatch \}\)/);
 
+// Export covers every match, not just the rendered page: it draws from the
+// helper's full result set and falls back to loaded rows only if absent.
+assert.match(popupJs, /state\.resultNumbers = response\.gameNumbers \?\? \[\]/);
+assert.match(popupJs, /function exportableNumbers\(\)/);
+assert.match(popupJs, /let pending = exportableNumbers\(\)\.filter\(/);
+assert.match(popupJs, /state\.selected = new Set\(exportableNumbers\(\)\)/);
+assert.doesNotMatch(popupJs, /let pending = state\.games\s*\n?\s*\.filter/);
+
 console.log("Name and FIDE-ID query handling verified.");

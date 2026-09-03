@@ -21,7 +21,8 @@ The implemented Python host uses only the Python standard library. It provides:
 - Chrome's four-byte length-prefixed JSON protocol;
 - host-owned configuration in the user's application-support directory;
 - strict path, command, player, FIDE ID, cursor, and result validation;
-- player candidate lookup and newest-first paginated game metadata;
+- player candidate lookup and newest-first paginated game metadata, plus the
+  complete bounded result set with the first page;
 - exact FIDE ID lookup across the `WhiteFideId` and `BlackFideId` tags, merged
   without duplicates and resolved to the stored player name;
 - bounded selected-game PGN export;

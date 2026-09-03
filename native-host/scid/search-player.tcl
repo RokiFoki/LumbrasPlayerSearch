@@ -12,6 +12,24 @@ proc requiredReadOnly {baseId} {
     }
 }
 
+# The complete newest-first result set, so the caller can export past the
+# current page. Bounded to keep the native response within its size ceiling.
+proc resultGameNumbers {baseId total} {
+    set maximum 20000
+    set numbers {}
+    if {$total <= 0} {
+        return $numbers
+    }
+    set wanted [expr {$total < $maximum ? $total : $maximum}]
+    foreach {index line deleted} [sc_base gameslist $baseId 0 $wanted dbfilter "N-"] {
+        set gameNumber [lindex [split $index "_"] 0]
+        if {[string is integer -strict $gameNumber]} {
+            lappend numbers $gameNumber
+        }
+    }
+    return $numbers
+}
+
 if {[llength $argv] != 4} {
     puts stderr "INVALID_ARGUMENTS"
     exit 2
@@ -74,6 +92,9 @@ try {
             set gameNumber [sc_filter previous]
         }
         puts "META\t$total\t$returned\t[encodeField $selectedPlayer]"
+        if {$offset == 0} {
+            puts "NUMBERS\t[join [resultGameNumbers $baseId $total] ,]"
+        }
     }
 } on error {message options} {
     puts stderr $message

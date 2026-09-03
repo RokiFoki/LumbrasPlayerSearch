@@ -25,6 +25,10 @@ MAX_PLAYER_LENGTH = 200
 MAX_FIDE_ID_LENGTH = 12
 MAX_SEARCH_RESULTS = 500
 MAX_SEARCH_CURSOR = 2**31 - 1
+# The complete result set is returned once, with the first page, so the caller
+# can export beyond the games it has rendered. The ceiling keeps the response
+# inside MAX_OUTPUT_BYTES and matches the 20 MB PGN export limit.
+MAX_RESULT_GAME_NUMBERS = 20000
 MAX_EXPORT_GAMES = 200
 SEARCH_TIMEOUT_SECONDS = 30
 # A FIDE-ID search scans the extra tags of every game instead of the name
@@ -250,6 +254,22 @@ class ScidAdapter:
         return completed.stdout
 
     @staticmethod
+    def _parse_game_numbers(value: str) -> List[int]:
+        numbers: List[int] = []
+        for item in value.split(","):
+            if not item:
+                continue
+            try:
+                number = int(item)
+            except ValueError as error:
+                raise HostError("SCID_OUTPUT_INVALID", "Scid returned invalid data.") from error
+            if number > 0:
+                numbers.append(number)
+            if len(numbers) >= MAX_RESULT_GAME_NUMBERS:
+                break
+        return numbers
+
+    @staticmethod
     def _game_from_parts(parts: Sequence[str]) -> Dict[str, Any]:
         return {
             "gameNumber": int(parts[1]),
@@ -272,6 +292,7 @@ class ScidAdapter:
         )
         candidates: List[Dict[str, Any]] = []
         games: List[Dict[str, Any]] = []
+        game_numbers: List[int] = []
         total = 0
         selected_player: Optional[str] = None
 
@@ -284,6 +305,8 @@ class ScidAdapter:
             elif parts[0] == "META" and len(parts) == 4:
                 total = int(parts[1])
                 selected_player = _decode_field(parts[3]) or None
+            elif parts[0] == "NUMBERS" and len(parts) == 2:
+                game_numbers = self._parse_game_numbers(parts[1])
             elif parts[0] == "GAME" and len(parts) == 11:
                 games.append(self._game_from_parts(parts))
 
@@ -291,6 +314,7 @@ class ScidAdapter:
             return {
                 "total": 0,
                 "games": [],
+                "gameNumbers": [],
                 "candidates": candidates,
                 "requiresPlayerChoice": bool(candidates),
                 "playerNotFound": not candidates,
@@ -301,6 +325,7 @@ class ScidAdapter:
         return {
             "total": total,
             "games": games,
+            "gameNumbers": game_numbers,
             "candidates": candidates,
             "requiresPlayerChoice": False,
             "playerNotFound": False,
@@ -315,6 +340,7 @@ class ScidAdapter:
             timeout=FIDE_ID_SEARCH_TIMEOUT_SECONDS,
         )
         games: List[Dict[str, Any]] = []
+        game_numbers: List[int] = []
         seen_game_numbers: set = set()
         name_counts: Dict[str, int] = {}
         total = 0
@@ -327,6 +353,8 @@ class ScidAdapter:
             if parts[0] == "META" and len(parts) == 4:
                 total = int(parts[1])
                 examined = int(parts[3])
+            elif parts[0] == "NUMBERS" and len(parts) == 2:
+                game_numbers = self._parse_game_numbers(parts[1])
             elif parts[0] == "GAME" and len(parts) == 13:
                 # Only a complete, character-for-character identifier counts;
                 # a tag that merely contains the digits is never a match.
@@ -350,6 +378,7 @@ class ScidAdapter:
         return {
             "total": total,
             "games": games,
+            "gameNumbers": game_numbers,
             "candidates": [],
             "requiresPlayerChoice": False,
             "playerNotFound": total == 0,

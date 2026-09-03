@@ -7,10 +7,15 @@ player name or by numeric FIDE ID, handles ambiguous name matches, displays
 paginated games, and exports selected games. PGN can be downloaded as a `.pgn`
 file or copied to the clipboard.
 
-The games table is paged, but the helper reports every matching game number
-with the first page, so an export is not limited to the rendered rows. All
-matches start selected; **Select none** and the per-row checkboxes narrow the
-export. PGN is fetched in batches of 200 game numbers.
+The helper reports every matching game number with the first page, so the popup
+knows the whole result set from one search. The table renders the first 100 rows
+for a fast first paint; **Download PGN** and **Copy PGN** load the remaining
+rows and then export everything selected. All matches start selected;
+**Select none** and the per-row checkboxes narrow the export.
+
+Further rows are fetched with `getGames`, which returns metadata for known game
+numbers in batches of 1,000 and never repeats a search, so filling the table
+costs the same for a name and a FIDE ID. PGN is fetched in batches of 200.
 
 The single search field accepts either form. Digits-only input of up to 12
 digits is sent as a FIDE ID and matched exactly against the `WhiteFideId` and

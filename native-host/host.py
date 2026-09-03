@@ -30,6 +30,9 @@ MAX_SEARCH_CURSOR = 2**31 - 1
 # inside MAX_OUTPUT_BYTES and matches the 20 MB PGN export limit.
 MAX_RESULT_GAME_NUMBERS = 20000
 MAX_EXPORT_GAMES = 200
+# Metadata for already-known game numbers is cheap, so the table can be
+# filled without repeating a search.
+MAX_DETAIL_GAMES = 1000
 SEARCH_TIMEOUT_SECONDS = 30
 # A FIDE-ID search scans the extra tags of every game instead of the name
 # index, so it needs a longer ceiling than a name search.
@@ -333,6 +336,18 @@ class ScidAdapter:
             "nextCursor": next_cursor,
         }
 
+    def list_games(self, game_numbers: Sequence[int]) -> List[Dict[str, Any]]:
+        csv_numbers = ",".join(str(number) for number in game_numbers)
+        output = self._run("list-games.tcl", [csv_numbers], timeout=SEARCH_TIMEOUT_SECONDS)
+        games: List[Dict[str, Any]] = []
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if parts[0] == "GAME" and len(parts) == 11:
+                games.append(self._game_from_parts(parts))
+        if len(games) != len(game_numbers):
+            raise HostError("SCID_OUTPUT_INVALID", "Scid returned incomplete game details.")
+        return games
+
     def search_fide_id(self, fide_id: str, offset: int, limit: int) -> Dict[str, Any]:
         output = self._run(
             "search-fideid.tcl",
@@ -484,17 +499,13 @@ class NativeHost:
             fide_id = _normalize_fide_id(payload.get("fideId"))
             cursor, limit = self._page_bounds(payload)
             response = self._adapter().search_fide_id(fide_id, cursor, limit)
+        elif command == "getGames":
+            self._reject_unknown_fields(payload, {"gameNumbers"})
+            game_numbers = self._validate_game_numbers(payload.get("gameNumbers"), MAX_DETAIL_GAMES)
+            response = {"games": self._adapter().list_games(game_numbers)}
         elif command == "getPgn":
             self._reject_unknown_fields(payload, {"gameNumbers"})
-            game_numbers = payload.get("gameNumbers")
-            if not isinstance(game_numbers, list) or not game_numbers:
-                raise HostError("INVALID_GAMES", "Choose at least one game.")
-            if len(game_numbers) > MAX_EXPORT_GAMES:
-                raise HostError("INVALID_GAMES", "Too many games were requested at once.")
-            if any(isinstance(number, bool) or not isinstance(number, int) or number <= 0 for number in game_numbers):
-                raise HostError("INVALID_GAMES", "One or more game numbers are invalid.")
-            if len(set(game_numbers)) != len(game_numbers):
-                raise HostError("INVALID_GAMES", "Duplicate game numbers are not allowed.")
+            game_numbers = self._validate_game_numbers(payload.get("gameNumbers"), MAX_EXPORT_GAMES)
 
             exported = self._adapter().export_games(game_numbers)
             accepted: List[Dict[str, Any]] = []
@@ -526,6 +537,18 @@ class NativeHost:
             "ok": True,
             **response,
         }
+
+    @staticmethod
+    def _validate_game_numbers(value: Any, maximum: int) -> List[int]:
+        if not isinstance(value, list) or not value:
+            raise HostError("INVALID_GAMES", "Choose at least one game.")
+        if len(value) > maximum:
+            raise HostError("INVALID_GAMES", "Too many games were requested at once.")
+        if any(isinstance(number, bool) or not isinstance(number, int) or number <= 0 for number in value):
+            raise HostError("INVALID_GAMES", "One or more game numbers are invalid.")
+        if len(set(value)) != len(value):
+            raise HostError("INVALID_GAMES", "Duplicate game numbers are not allowed.")
+        return value
 
     @staticmethod
     def _page_bounds(payload: Dict[str, Any]) -> Tuple[int, int]:

@@ -25,6 +25,8 @@ The implemented Python host uses only the Python standard library. It provides:
   complete bounded result set with the first page;
 - exact FIDE ID lookup across the `WhiteFideId` and `BlackFideId` tags, merged
   without duplicates and resolved to the stored player name;
+- bounded game metadata for known game numbers, so a client can complete a
+  result set without repeating a search;
 - bounded selected-game PGN export;
 - timeouts and stable safe error codes.
 

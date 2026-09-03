@@ -5,6 +5,7 @@ const ALLOWED_COMMANDS = new Set([
   "configure",
   "searchPlayer",
   "searchFideId",
+  "getGames",
   "getPgn"
 ]);
 

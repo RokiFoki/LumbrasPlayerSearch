@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LubrasChessGenie",
+  "name": "Lumbras & Chess Genie",
   "description": "Find games in a local Scid database and export standard PGN files.",
   "version": "0.1.0",
   "icons": {

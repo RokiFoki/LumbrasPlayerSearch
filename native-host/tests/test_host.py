@@ -19,6 +19,7 @@ import host  # noqa: E402
 class FakeAdapter:
     def __init__(self):
         self.fide_id_calls = []
+        self.list_games_calls = []
 
     def search_player(self, player, offset, limit):
         return {
@@ -71,6 +72,24 @@ class FakeAdapter:
             "fideId": fide_id,
             "nextCursor": offset + 1 if offset + 1 < 2 else None,
         }
+
+    def list_games(self, game_numbers):
+        self.list_games_calls.append(list(game_numbers))
+        return [
+            {
+                "gameNumber": number,
+                "date": "2026.01.02",
+                "event": "Example",
+                "round": "1",
+                "white": "Player, Example",
+                "black": "Opponent, Example",
+                "result": "1-0",
+                "whiteElo": 2500,
+                "blackElo": 2400,
+                "eco": "C42",
+            }
+            for number in game_numbers
+        ]
 
     def export_games(self, game_numbers):
         return [
@@ -304,6 +323,39 @@ class HostTests(unittest.TestCase):
             self.request("getPgn", {"gameNumbers": response["gameNumbers"]})
         )
         self.assertEqual([game["gameNumber"] for game in exported["games"]], [7, 8])
+
+    def test_get_games_returns_metadata_for_known_numbers(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        response = native.dispatch(self.request("getGames", {"gameNumbers": [7, 8, 9]}))
+        self.assertTrue(response["ok"])
+        self.assertEqual([game["gameNumber"] for game in response["games"]], [7, 8, 9])
+        self.assertEqual(native.adapter.list_games_calls, [[7, 8, 9]])
+
+    def test_get_games_rejects_invalid_and_oversized_batches(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        for payload in [
+            {"gameNumbers": []},
+            {"gameNumbers": "7"},
+            {"gameNumbers": [0]},
+            {"gameNumbers": [-1]},
+            {"gameNumbers": [True]},
+            {"gameNumbers": [7, 7]},
+            {"gameNumbers": list(range(1, host.MAX_DETAIL_GAMES + 2))},
+        ]:
+            with self.subTest(payload=payload):
+                with self.assertRaises(host.HostError) as raised:
+                    native.dispatch(self.request("getGames", payload))
+                self.assertEqual(raised.exception.code, "INVALID_GAMES")
+        with self.assertRaises(host.HostError) as raised:
+            native.dispatch(self.request("getGames", {"gameNumbers": [7], "limit": 1}))
+        self.assertEqual(raised.exception.code, "INVALID_REQUEST")
+        self.assertEqual(native.adapter.list_games_calls, [])
+
+    def test_get_games_accepts_the_maximum_batch(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        numbers = list(range(1, host.MAX_DETAIL_GAMES + 1))
+        response = native.dispatch(self.request("getGames", {"gameNumbers": numbers}))
+        self.assertEqual(len(response["games"]), host.MAX_DETAIL_GAMES)
 
     def test_export_rejects_duplicate_game_numbers(self):
         native = FakeNativeHost(host.ConfigStore(self.config_path))

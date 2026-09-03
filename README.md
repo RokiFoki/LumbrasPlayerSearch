@@ -10,8 +10,7 @@ standard PGN.
 - Offers exact player choices when several names match a search.
 - Shows the stored player name for games found by FIDE ID.
 - Shows matching games with date, players, ratings, result, event, and ECO.
-- Loads large result sets in pages and exports every match, not only
-  the games on screen.
+- Exports every matching game, without paging through the results first.
 - Downloads selected games as a `.pgn` file.
 - Copies selected PGN to the clipboard.
 - Keeps the database local and opens it read-only.
@@ -115,7 +114,7 @@ For example:
 
 ### 5. Configure the extension
 
-1. Open Chrome's extensions menu and select **LubrasChessGenie**.
+1. Open Chrome's extensions menu and select **Lumbras & Chess Genie**.
 2. Expand **Local database settings**.
 3. Enter the Scid executable path:
 
@@ -148,10 +147,17 @@ For example:
 6. Click **Download PGN** to save a `.pgn` file, or **Copy PGN** to place the
    PGN text on the clipboard.
 
-The table shows 100 games at a time, but an export covers the whole result set.
-Searching a player with 205 games and clicking **Download PGN** writes all 205,
-without pressing **Load more**. A single export is limited to 20 MB and to the
-newest 20,000 matches; the status line says so when a result set is larger.
+The table shows the first 100 games so results appear quickly. **Download PGN**
+and **Copy PGN** load the rest of the result set first and then export all of
+it, so a player with 205 games gives a 205-game file without pressing **Load
+more**. **Load more** stays available to browse further before exporting; it
+lists games by number and never repeats the search, so it is fast for names and
+FIDE IDs alike.
+
+A single export is limited to 20 MB and to the newest 20,000 matches, and the
+table renders at most 5,000 rows; the status line says so when a result set is
+larger. Exporting a large set takes a while: about 28 seconds for a 3,934-game
+player on a 10-million-game database.
 
 Input that consists only of digits is treated as a FIDE ID of up to 12 digits;
 anything else is treated as a player name. A FIDE ID must match the stored tag

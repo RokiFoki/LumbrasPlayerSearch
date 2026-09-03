@@ -105,17 +105,37 @@ assert.equal(ChessGenieQuery.label(nameQuery), "Carlsen, Magnus");
 // The popup wires the classifier to both native commands.
 assert.match(popupHtml, /<script src="query\.js"><\/script>\s*<script src="popup\.js"><\/script>/);
 assert.match(popupHtml, /placeholder="Surname, Given name or FIDE ID"/);
+
+// Title.
+assert.match(popupHtml, /<title>Lumbras &amp; Chess Genie<\/title>/);
+assert.match(popupHtml, /<h1>Lumbras &amp; Chess Genie<\/h1>/);
+assert.equal(manifest.name, "Lumbras & Chess Genie");
 assert.match(popupJs, /ChessGenieQuery\.classify\(/);
 assert.match(popupJs, /"searchFideId",\s*\{\s*fideId: query\.fideId/);
 assert.match(popupJs, /"searchPlayer",\s*\{\s*player: query\.player/);
 assert.match(serviceWorker, /"searchFideId"/);
 assert.match(serviceWorker, /"searchPlayer"/);
 
-// "Load more" pages with the original query object, never the resolved name
-// from the input field, so a FIDE-ID search keeps searching by ID.
-assert.match(popupJs, /runSearch\(state\.query, true\)/);
+// The classified query is kept in state, and a search is never re-issued from
+// the resolved player name, so a FIDE-ID search never becomes a name search.
+assert.match(popupJs, /state\.query = query/);
 assert.doesNotMatch(popupJs, /runSearch\(state\.player/);
 assert.doesNotMatch(popupJs, /runSearch\(elements\.player/);
+
+// Filling the table reuses the known game numbers instead of repeating the
+// search, so it costs the same for a name and a FIDE ID.
+assert.match(popupJs, /nativeRequest\("getGames", \{ gameNumbers: batch \}\)/);
+assert.match(serviceWorker, /"getGames"/);
+assert.doesNotMatch(popupJs, /runSearch\([^)]*,\s*true\)/);
+
+// Download PGN and Copy PGN load the whole result set before exporting.
+const exportHandlers = popupJs.match(
+  /elements\.(downloadPgn|copyPgn)\.addEventListener\("click"[\s\S]*?collectSelectedPgn\(\)/g
+);
+assert.equal(exportHandlers.length, 2);
+for (const handler of exportHandlers) {
+  assert.match(handler, /await loadGamesUntil\(state\.resultNumbers\.length\)/);
+}
 
 // PGN export is untouched by the search mode.
 assert.match(popupJs, /nativeRequest\("getPgn", \{ gameNumbers: requestBatch \}\)/);

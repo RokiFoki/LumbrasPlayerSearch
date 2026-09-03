@@ -325,6 +325,29 @@ class ScidAdapterParsingTests(unittest.TestCase):
             result = self.adapter.search_fide_id("999999999", 0, 100)
         self.assertEqual(result["gameNumbers"], [])
 
+    def test_list_games_parses_metadata_for_requested_numbers(self):
+        rows = []
+        for number in (30, 20):
+            fields = ["2026.01.02", "Example Event", "1", "Player, Example",
+                      "Opponent", "1-0", "2500", "2400", "C42"]
+            rows.append("GAME\t{}\t{}".format(number, "\t".join(encoded(v) for v in fields)))
+        with mock.patch.object(self.adapter, "_run", return_value="\n".join(rows)) as run:
+            games = self.adapter.list_games([30, 20])
+        run.assert_called_once_with(
+            "list-games.tcl", ["30,20"], timeout=host.SEARCH_TIMEOUT_SECONDS
+        )
+        self.assertEqual([game["gameNumber"] for game in games], [30, 20])
+        self.assertEqual(games[0]["white"], "Player, Example")
+        self.assertEqual(games[0]["whiteElo"], 2500)
+
+    def test_list_games_rejects_an_incomplete_reply(self):
+        fields = ["2026.01.02", "E", "1", "P", "O", "1-0", "2500", "2400", "C42"]
+        row = "GAME\t30\t{}".format("\t".join(encoded(v) for v in fields))
+        with mock.patch.object(self.adapter, "_run", return_value=row):
+            with self.assertRaises(host.HostError) as raised:
+                self.adapter.list_games([30, 20])
+        self.assertEqual(raised.exception.code, "SCID_OUTPUT_INVALID")
+
     def test_export_output_parsing(self):
         pgn = '[Event "Example"]\n\n1.e4 e5 1/2-1/2\n'
         output = "PGN\t42\t{}\n".format(encoded(pgn))

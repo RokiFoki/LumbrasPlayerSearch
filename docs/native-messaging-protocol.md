@@ -14,8 +14,8 @@ Every request contains:
 ```
 
 The native host accepts `hello`, `status`, `configure`, `searchPlayer`,
-`searchFideId`, and `getPgn`. It does not accept URLs, web origins, upload
-commands, or arbitrary shell commands.
+`searchFideId`, `getGames`, and `getPgn`. It does not accept URLs, web origins,
+upload commands, or arbitrary shell commands.
 
 ## `configure`
 
@@ -122,6 +122,25 @@ always `false`; `playerNotFound` is `true` when no game carries the ID:
 Each page repeats the tag scan, so `cursor` must be paired with the same
 `fideId`. The scan takes longer than an indexed name search; the host allows it
 120 seconds instead of 30.
+
+## `getGames`
+
+Returns bounded metadata for game numbers the caller already has, so a client
+can fill in the rest of a result set without repeating a search:
+
+```json
+{
+  "protocolVersion": 1,
+  "id": "request-uuid",
+  "command": "getGames",
+  "payload": { "gameNumbers": [10344015, 10314728] }
+}
+```
+
+`gameNumbers` must be a non-empty list of at most 1,000 distinct positive
+integers. The response carries a `games` array in the requested order, with the
+same fields as a search page. The host rejects a reply that does not cover every
+requested game.
 
 ## `getPgn`
 

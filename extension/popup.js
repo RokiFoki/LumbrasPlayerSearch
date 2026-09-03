@@ -1,6 +1,10 @@
 const EXPORT_REQUEST_SIZE = 200;
 const MAX_TOTAL_PGN_BYTES = 20 * 1024 * 1024;
 const SEARCH_PAGE_SIZE = 100;
+// Metadata for known game numbers is cheap, so the rest of a result set is
+// filled in by number instead of repeating the search.
+const DETAIL_BATCH_SIZE = 1000;
+const MAX_RENDERED_GAMES = 5000;
 
 const elements = {
   hostBadge: document.querySelector("#hostBadge"),
@@ -33,7 +37,6 @@ const state = {
   // The stored player name shown in results and used for file names.
   player: "",
   total: 0,
-  nextCursor: null,
   games: [],
   // Every matching game number, not only the rendered page, so an export can
   // cover the whole result set.
@@ -80,7 +83,6 @@ function updateExportButtons() {
 
 function resetResults() {
   state.total = 0;
-  state.nextCursor = null;
   state.games = [];
   state.resultNumbers = [];
   state.selected.clear();
@@ -100,7 +102,7 @@ function renderCandidates(candidates) {
     button.textContent = `${candidate.name} (${candidate.frequency})`;
     button.addEventListener("click", () => {
       elements.player.value = candidate.name;
-      void runSearch({ kind: "player", player: candidate.name }, false);
+      void runSearch({ kind: "player", player: candidate.name });
     });
     elements.candidates.append(button);
   }
@@ -157,6 +159,30 @@ function exportableNumbers() {
     : state.games.map((game) => game.gameNumber);
 }
 
+function updateLoadMore() {
+  elements.loadMore.classList.toggle(
+    "hidden",
+    state.games.length >= state.resultNumbers.length
+  );
+}
+
+// Loads result rows by game number until `target` games are shown. This never
+// repeats a search, so it costs the same for a name and a FIDE ID.
+async function loadGamesUntil(target) {
+  const wanted = Math.min(target, state.resultNumbers.length, MAX_RENDERED_GAMES);
+  while (state.games.length < wanted) {
+    const start = state.games.length;
+    const batch = state.resultNumbers.slice(start, start + DETAIL_BATCH_SIZE);
+    if (batch.length === 0) break;
+    const response = await nativeRequest("getGames", { gameNumbers: batch });
+    const loaded = response.games ?? [];
+    if (loaded.length === 0) break;
+    appendGames(loaded);
+    setStatus(`Loading games… ${state.games.length} of ${state.resultNumbers.length}.`);
+  }
+  updateLoadMore();
+}
+
 function playerWithElo(name, elo) {
   if (!name) return "—";
   return elo ? `${name} (${elo})` : name;
@@ -210,23 +236,21 @@ function submitSearch(rawValue) {
     setStatus(ChessGenieQuery.validationMessage(query));
     return;
   }
-  void runSearch(query, false);
+  void runSearch(query);
 }
 
-async function runSearch(query, append) {
+async function runSearch(query) {
   if (!state.ready || state.busy) return;
 
-  if (!append) {
-    resetResults();
-    renderCandidates([]);
-    state.query = query;
-    state.player = "";
-  }
+  resetResults();
+  renderCandidates([]);
+  state.query = query;
+  state.player = "";
 
   setBusy(true);
-  setStatus(append ? "Loading more games…" : ChessGenieQuery.searchingMessage(query));
+  setStatus(ChessGenieQuery.searchingMessage(query));
   try {
-    const [command, payload] = searchRequest(query, append ? state.nextCursor : 0);
+    const [command, payload] = searchRequest(query, 0);
     const response = await nativeRequest(command, payload);
 
     if (response.playerNotFound) {
@@ -244,14 +268,11 @@ async function runSearch(query, append) {
       state.player = response.selectedPlayer ?? ChessGenieQuery.label(query);
     }
     state.total = response.total ?? 0;
-    state.nextCursor = response.nextCursor ?? null;
-    if (!append) {
-      state.resultNumbers = response.gameNumbers ?? [];
-      // Every match starts selected, including pages not rendered yet.
-      state.selected = new Set(exportableNumbers());
-    }
+    state.resultNumbers = response.gameNumbers ?? [];
+    // Every match starts selected, including rows not rendered yet.
+    state.selected = new Set(exportableNumbers());
     appendGames(response.games ?? []);
-    elements.loadMore.classList.toggle("hidden", state.nextCursor === null);
+    updateLoadMore();
     let message =
       `Showing ${state.games.length} of ${state.total} games for ${resultLabel()}. ` +
       `${state.selected.size} selected for export.`;
@@ -348,8 +369,16 @@ elements.searchForm.addEventListener("submit", (event) => {
   submitSearch(elements.player.value);
 });
 
-elements.loadMore.addEventListener("click", () => {
-  if (state.nextCursor !== null && state.query) void runSearch(state.query, true);
+elements.loadMore.addEventListener("click", async () => {
+  setBusy(true);
+  try {
+    await loadGamesUntil(state.games.length + DETAIL_BATCH_SIZE);
+    setStatus(`Showing ${state.games.length} of ${state.total} games for ${resultLabel()}.`);
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
 });
 
 elements.selectAll.addEventListener("click", () => {
@@ -371,6 +400,7 @@ elements.selectNone.addEventListener("click", () => {
 elements.downloadPgn.addEventListener("click", async () => {
   setBusy(true);
   try {
+    await loadGamesUntil(state.resultNumbers.length);
     const pgn = await collectSelectedPgn();
     await downloadPgn(pgn);
     setStatus(`Prepared ${state.selected.size} games as ${exportFilename()}.`);
@@ -384,6 +414,7 @@ elements.downloadPgn.addEventListener("click", async () => {
 elements.copyPgn.addEventListener("click", async () => {
   setBusy(true);
   try {
+    await loadGamesUntil(state.resultNumbers.length);
     const pgn = await collectSelectedPgn();
     await navigator.clipboard.writeText(pgn);
     setStatus(`Copied ${state.selected.size} games as PGN.`);

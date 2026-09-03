@@ -13,9 +13,9 @@ Every request contains:
 }
 ```
 
-The native host accepts `hello`, `status`, `configure`, `searchPlayer`, and
-`getPgn`. It does not accept URLs, web origins, upload commands, or arbitrary
-shell commands.
+The native host accepts `hello`, `status`, `configure`, `searchPlayer`,
+`searchFideId`, and `getPgn`. It does not accept URLs, web origins, upload
+commands, or arbitrary shell commands.
 
 ## `configure`
 
@@ -67,6 +67,54 @@ The response contains bounded game metadata, not PGN bodies:
 If the query is not an exact stored player name, the host returns a bounded
 `candidates` list with `requiresPlayerChoice: true`; it does not silently choose
 a namesake.
+
+## `searchFideId`
+
+Request fields:
+
+```json
+{
+  "protocolVersion": 1,
+  "id": "request-uuid",
+  "command": "searchFideId",
+  "payload": {
+    "fideId": "1503014",
+    "limit": 100,
+    "cursor": 0
+  }
+}
+```
+
+`fideId` must be a string of 1–12 ASCII digits; leading zeros are dropped and
+an all-zero value is rejected with `INVALID_FIDE_ID`. `limit` and `cursor` use
+the same bounds as `searchPlayer`. The host searches the `WhiteFideId` and
+`BlackFideId` extra tags of the local database for the complete identifier,
+merges both sides without duplicates, and orders games newest first.
+
+The response has the same shape as `searchPlayer`, with `selectedPlayer` set to
+the name most often stored beside the identifier and `fideId` echoing the
+normalized value. `candidates` is always empty and `requiresPlayerChoice`
+always `false`; `playerNotFound` is `true` when no game carries the ID:
+
+```json
+{
+  "protocolVersion": 1,
+  "id": "request-uuid",
+  "ok": true,
+  "total": 3934,
+  "selectedPlayer": "Carlsen, Magnus",
+  "fideId": "1503014",
+  "games": [],
+  "candidates": [],
+  "requiresPlayerChoice": false,
+  "playerNotFound": false,
+  "nextCursor": 100
+}
+```
+
+Each page repeats the tag scan, so `cursor` must be paired with the same
+`fideId`. The scan takes longer than an indexed name search; the host allows it
+120 seconds instead of 30.
 
 ## `getPgn`
 

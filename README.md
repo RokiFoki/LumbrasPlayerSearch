@@ -1,12 +1,14 @@
 # LubrasChessGenie
 
 LubrasChessGenie is an open-source Chrome extension for searching a local Scid
-5 chess database and exporting selected games as standard PGN.
+5 chess database by player name or FIDE ID and exporting selected games as
+standard PGN.
 
 ## Features
 
-- Searches for games by player name.
+- Searches for games by player name or by numeric FIDE ID.
 - Offers exact player choices when several names match a search.
+- Shows the stored player name for games found by FIDE ID.
 - Shows matching games with date, players, ratings, result, event, and ECO.
 - Loads large result sets in pages.
 - Downloads selected games as a `.pgn` file.
@@ -28,6 +30,10 @@ shared base path without an extension. For example, for the files above, enter
 `/path/to/DatabaseName`.
 
 Scid 4 (`.si4`) databases are not supported by the current version.
+
+Searching by FIDE ID uses the `WhiteFideId` and `BlackFideId` PGN tags stored
+with each game. Games that were imported without those tags can only be found
+by player name.
 
 ## Requirements
 
@@ -127,13 +133,29 @@ For example:
 ## Usage
 
 1. Open the extension.
-2. Enter a player name in Scid's `Surname, Given name` format, such as
-   `Carlsen, Magnus`.
+2. Enter either of the following in the search field:
+   - a player name in Scid's `Surname, Given name` format, such as
+     `Carlsen, Magnus`;
+   - a numeric FIDE ID, such as `1503014`.
 3. Click **Search**.
-4. If several stored names match, select the desired player.
+4. If several stored names match a name search, select the desired player.
+   A FIDE ID search skips this step and shows the stored player name with the
+   results.
 5. Select the games to export.
 6. Click **Download PGN** to save a `.pgn` file, or **Copy PGN** to place the
    PGN text on the clipboard.
+
+Input that consists only of digits is treated as a FIDE ID of up to 12 digits;
+anything else is treated as a player name. A FIDE ID must match the stored tag
+completely, so partial IDs return no games. Games are found whether the player
+had White or Black, and each game is listed once.
+
+FIDE ID searches take longer than name searches because Scid scans the
+`WhiteFideId` and `BlackFideId` tags of every game instead of using the name
+index. On a database of about 10 million games, a FIDE ID search takes roughly
+13 seconds, and each **Load more** repeats the search for the next page.
+Everything runs against the local database; no FIDE website or other network
+service is used.
 
 The resulting PGN is a standard text format that can be opened or imported by
 chess software that supports PGN.
@@ -150,6 +172,8 @@ chess software that supports PGN.
   `/Applications/Scid.app/Contents/scid/scid` exists and is executable.
 - **Database on Desktop:** move the complete database directory to a location
   such as `~/ChessDatabases` and update the configured base path.
+- **No games for a FIDE ID:** confirm the complete ID and that the games in the
+  database carry `WhiteFideId`/`BlackFideId` tags; otherwise search by name.
 
 ## Updating or uninstalling
 

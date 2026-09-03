@@ -47,6 +47,7 @@ class MacosInstallScriptTests(unittest.TestCase):
             self.assertTrue(os.access(launcher, os.X_OK))
             self.assertTrue((installed_host / "host.py").is_file())
             self.assertTrue((installed_host / "scid" / "search-player.tcl").is_file())
+            self.assertTrue((installed_host / "scid" / "search-fideid.tcl").is_file())
             self.assertTrue((installed_host / "scid" / "export-games.tcl").is_file())
 
             with manifest.open("r", encoding="utf-8") as handle:

@@ -17,6 +17,9 @@ import host  # noqa: E402
 
 
 class FakeAdapter:
+    def __init__(self):
+        self.fide_id_calls = []
+
     def search_player(self, player, offset, limit):
         return {
             "total": 1,
@@ -41,6 +44,32 @@ class FakeAdapter:
             "nextCursor": None,
         }
 
+    def search_fide_id(self, fide_id, offset, limit):
+        self.fide_id_calls.append((fide_id, offset, limit))
+        return {
+            "total": 2,
+            "games": [
+                {
+                    "gameNumber": 7 + offset,
+                    "date": "2026.01.02",
+                    "event": "Example",
+                    "round": "1",
+                    "white": "Player, Example",
+                    "black": "Opponent, Example",
+                    "result": "1-0",
+                    "whiteElo": 2500,
+                    "blackElo": 2400,
+                    "eco": "C42",
+                }
+            ],
+            "candidates": [],
+            "requiresPlayerChoice": False,
+            "playerNotFound": False,
+            "selectedPlayer": "Player, Example",
+            "fideId": fide_id,
+            "nextCursor": offset + 1 if offset + 1 < 2 else None,
+        }
+
     def export_games(self, game_numbers):
         return [
             {"gameNumber": number, "pgn": '[Event "Example"]\n\n1.e4 e5 1/2-1/2\n'}
@@ -49,8 +78,12 @@ class FakeAdapter:
 
 
 class FakeNativeHost(host.NativeHost):
+    def __init__(self, config_store=None):
+        super().__init__(config_store)
+        self.adapter = FakeAdapter()
+
     def _adapter(self):
-        return FakeAdapter()
+        return self.adapter
 
 
 class ChunkedReader(io.BytesIO):
@@ -134,6 +167,130 @@ class HostTests(unittest.TestCase):
         encoded = json.dumps(response).lower()
         self.assertNotIn("chessgenie.app", encoded)
         self.assertNotIn("upload", encoded)
+
+    def test_name_search_still_accepts_names_that_contain_digits(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        response = native.dispatch(self.request("searchPlayer", {"player": "Player 2, Example"}))
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["selectedPlayer"], "Player 2, Example")
+        self.assertEqual(native.adapter.fide_id_calls, [])
+
+    def test_search_by_fide_id_returns_games_and_stored_name(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        response = native.dispatch(
+            self.request("searchFideId", {"fideId": "1503014", "limit": 100, "cursor": 0})
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["fideId"], "1503014")
+        self.assertEqual(response["selectedPlayer"], "Player, Example")
+        self.assertEqual(response["games"][0]["gameNumber"], 7)
+        self.assertFalse(response["playerNotFound"])
+        self.assertFalse(response["requiresPlayerChoice"])
+        self.assertEqual(native.adapter.fide_id_calls, [("1503014", 0, 100)])
+
+    def test_fide_id_search_defaults_limit_and_cursor(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        native.dispatch(self.request("searchFideId", {"fideId": "1503014"}))
+        self.assertEqual(native.adapter.fide_id_calls, [("1503014", 0, 100)])
+
+    def test_fide_id_is_normalized_before_reaching_scid(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        native.dispatch(self.request("searchFideId", {"fideId": "  0001503014 "}))
+        self.assertEqual(native.adapter.fide_id_calls, [("1503014", 0, 100)])
+
+    def test_fide_id_pagination_keeps_the_original_id(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        first = native.dispatch(self.request("searchFideId", {"fideId": "1503014", "limit": 1}))
+        self.assertEqual(first["nextCursor"], 1)
+        second = native.dispatch(
+            self.request(
+                "searchFideId",
+                {"fideId": "1503014", "limit": 1, "cursor": first["nextCursor"]},
+            )
+        )
+        self.assertIsNone(second["nextCursor"])
+        self.assertEqual(second["fideId"], "1503014")
+        self.assertEqual(
+            native.adapter.fide_id_calls, [("1503014", 0, 1), ("1503014", 1, 1)]
+        )
+
+    def test_invalid_fide_ids_are_rejected_before_scid_runs(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        for value in [
+            "",
+            "   ",
+            "0",
+            "000",
+            "1503014a",
+            "150 3014",
+            "-1503014",
+            "1.5e6",
+            "\u0661\u0665\u0660\u0663",  # Arabic-Indic digits
+            "\uff11\uff15\uff10\uff13",  # full-width digits
+            "1" * (host.MAX_FIDE_ID_LENGTH + 1),
+            "1" * 1000,
+            1503014,
+            None,
+            True,
+            ["1503014"],
+        ]:
+            with self.subTest(value=value):
+                with self.assertRaises(host.HostError) as raised:
+                    native.dispatch(self.request("searchFideId", {"fideId": value}))
+                self.assertEqual(raised.exception.code, "INVALID_FIDE_ID")
+        self.assertEqual(native.adapter.fide_id_calls, [])
+
+    def test_fide_id_search_accepts_the_maximum_length(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        value = "9" * host.MAX_FIDE_ID_LENGTH
+        native.dispatch(self.request("searchFideId", {"fideId": value}))
+        self.assertEqual(native.adapter.fide_id_calls, [(value, 0, 100)])
+
+    def test_fide_id_search_validates_limit_and_cursor(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        for payload, code in [
+            ({"fideId": "1503014", "limit": 0}, "INVALID_LIMIT"),
+            ({"fideId": "1503014", "limit": host.MAX_SEARCH_RESULTS + 1}, "INVALID_LIMIT"),
+            ({"fideId": "1503014", "limit": True}, "INVALID_LIMIT"),
+            ({"fideId": "1503014", "cursor": -1}, "INVALID_CURSOR"),
+            ({"fideId": "1503014", "cursor": "0"}, "INVALID_CURSOR"),
+            ({"fideId": "1503014", "cursor": host.MAX_SEARCH_CURSOR + 1}, "INVALID_CURSOR"),
+        ]:
+            with self.subTest(payload=payload):
+                with self.assertRaises(host.HostError) as raised:
+                    native.dispatch(self.request("searchFideId", payload))
+                self.assertEqual(raised.exception.code, code)
+        self.assertEqual(native.adapter.fide_id_calls, [])
+
+    def test_fide_id_search_rejects_unknown_and_missing_fields(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        with self.assertRaises(host.HostError) as raised:
+            native.dispatch(
+                self.request("searchFideId", {"fideId": "1503014", "player": "Player, Example"})
+            )
+        self.assertEqual(raised.exception.code, "INVALID_REQUEST")
+        with self.assertRaises(host.HostError) as raised:
+            native.dispatch(self.request("searchFideId", {}))
+        self.assertEqual(raised.exception.code, "INVALID_FIDE_ID")
+        self.assertEqual(native.adapter.fide_id_calls, [])
+
+    def test_fide_id_search_response_is_source_agnostic(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        response = native.dispatch(self.request("searchFideId", {"fideId": "1503014"}))
+        encoded = json.dumps(response).lower()
+        self.assertNotIn("chessgenie.app", encoded)
+        self.assertNotIn("fide.com", encoded)
+        self.assertNotIn("http", encoded)
+
+    def test_pgn_export_works_for_games_found_by_fide_id(self):
+        native = FakeNativeHost(host.ConfigStore(self.config_path))
+        found = native.dispatch(self.request("searchFideId", {"fideId": "1503014"}))
+        numbers = [game["gameNumber"] for game in found["games"]]
+        exported = native.dispatch(self.request("getPgn", {"gameNumbers": numbers}))
+        self.assertTrue(exported["ok"])
+        self.assertEqual([game["gameNumber"] for game in exported["games"]], numbers)
+        self.assertTrue(exported["games"][0]["pgn"].startswith('[Event "Example"]'))
+        self.assertEqual(exported["remainingGameNumbers"], [])
 
     def test_export_rejects_duplicate_game_numbers(self):
         native = FakeNativeHost(host.ConfigStore(self.config_path))

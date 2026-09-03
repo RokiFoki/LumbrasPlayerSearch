@@ -22,8 +22,15 @@ HOST_VERSION = "0.1.0"
 MAX_INPUT_BYTES = 1024 * 1024
 MAX_OUTPUT_BYTES = 750 * 1024
 MAX_PLAYER_LENGTH = 200
+MAX_FIDE_ID_LENGTH = 12
 MAX_SEARCH_RESULTS = 500
+MAX_SEARCH_CURSOR = 2**31 - 1
 MAX_EXPORT_GAMES = 200
+SEARCH_TIMEOUT_SECONDS = 30
+# A FIDE-ID search scans the extra tags of every game instead of the name
+# index, so it needs a longer ceiling than a name search.
+FIDE_ID_SEARCH_TIMEOUT_SECONDS = 120
+FIDE_ID_PATTERN = re.compile(r"[0-9]+")
 
 
 class HostError(Exception):
@@ -58,6 +65,30 @@ def _normalize_database_base(raw: str) -> pathlib.Path:
             value = value[: -len(extension)]
             break
     return pathlib.Path(value).expanduser().resolve()
+
+
+def _normalize_fide_id(raw: Any) -> str:
+    """Return a canonical FIDE ID or raise for anything that is not one.
+
+    Only ASCII digits are accepted, so the value can safely be passed to Scid
+    as a complete-value tag pattern. Leading zeros are dropped because stored
+    tags never carry them; an all-zero value is rejected.
+    """
+    if not isinstance(raw, str):
+        raise HostError("INVALID_FIDE_ID", "Enter a numeric FIDE ID.")
+    value = raw.strip()
+    if not value or len(value) > MAX_FIDE_ID_LENGTH or not FIDE_ID_PATTERN.fullmatch(value):
+        raise HostError(
+            "INVALID_FIDE_ID",
+            "Enter a valid FIDE ID of up to {} digits.".format(MAX_FIDE_ID_LENGTH),
+        )
+    normalized = value.lstrip("0")
+    if not normalized:
+        raise HostError(
+            "INVALID_FIDE_ID",
+            "Enter a valid FIDE ID of up to {} digits.".format(MAX_FIDE_ID_LENGTH),
+        )
+    return normalized
 
 
 def _validate_executable(raw: str) -> pathlib.Path:
@@ -218,8 +249,27 @@ class ScidAdapter:
             raise HostError("SCID_FAILED", "Scid could not complete the requested operation.")
         return completed.stdout
 
+    @staticmethod
+    def _game_from_parts(parts: Sequence[str]) -> Dict[str, Any]:
+        return {
+            "gameNumber": int(parts[1]),
+            "date": _decode_field(parts[2]) or None,
+            "event": _decode_field(parts[3]) or None,
+            "round": _decode_field(parts[4]) or None,
+            "white": _decode_field(parts[5]) or None,
+            "black": _decode_field(parts[6]) or None,
+            "result": _decode_field(parts[7]) or None,
+            "whiteElo": int(_decode_field(parts[8]) or 0) or None,
+            "blackElo": int(_decode_field(parts[9]) or 0) or None,
+            "eco": _decode_field(parts[10]) or None,
+        }
+
     def search_player(self, player: str, offset: int, limit: int) -> Dict[str, Any]:
-        output = self._run("search-player.tcl", [player, str(offset), str(limit)], timeout=30)
+        output = self._run(
+            "search-player.tcl",
+            [player, str(offset), str(limit)],
+            timeout=SEARCH_TIMEOUT_SECONDS,
+        )
         candidates: List[Dict[str, Any]] = []
         games: List[Dict[str, Any]] = []
         total = 0
@@ -235,20 +285,7 @@ class ScidAdapter:
                 total = int(parts[1])
                 selected_player = _decode_field(parts[3]) or None
             elif parts[0] == "GAME" and len(parts) == 11:
-                games.append(
-                    {
-                        "gameNumber": int(parts[1]),
-                        "date": _decode_field(parts[2]) or None,
-                        "event": _decode_field(parts[3]) or None,
-                        "round": _decode_field(parts[4]) or None,
-                        "white": _decode_field(parts[5]) or None,
-                        "black": _decode_field(parts[6]) or None,
-                        "result": _decode_field(parts[7]) or None,
-                        "whiteElo": int(_decode_field(parts[8]) or 0) or None,
-                        "blackElo": int(_decode_field(parts[9]) or 0) or None,
-                        "eco": _decode_field(parts[10]) or None,
-                    }
-                )
+                games.append(self._game_from_parts(parts))
 
         if selected_player is None:
             return {
@@ -268,6 +305,56 @@ class ScidAdapter:
             "requiresPlayerChoice": False,
             "playerNotFound": False,
             "selectedPlayer": selected_player,
+            "nextCursor": next_cursor,
+        }
+
+    def search_fide_id(self, fide_id: str, offset: int, limit: int) -> Dict[str, Any]:
+        output = self._run(
+            "search-fideid.tcl",
+            [fide_id, str(offset), str(limit)],
+            timeout=FIDE_ID_SEARCH_TIMEOUT_SECONDS,
+        )
+        games: List[Dict[str, Any]] = []
+        seen_game_numbers: set = set()
+        name_counts: Dict[str, int] = {}
+        total = 0
+        examined = 0
+
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if not parts:
+                continue
+            if parts[0] == "META" and len(parts) == 4:
+                total = int(parts[1])
+                examined = int(parts[3])
+            elif parts[0] == "GAME" and len(parts) == 13:
+                # Only a complete, character-for-character identifier counts;
+                # a tag that merely contains the digits is never a match.
+                white_matches = _decode_field(parts[11]).strip() == fide_id
+                black_matches = _decode_field(parts[12]).strip() == fide_id
+                if not white_matches and not black_matches:
+                    continue
+                game = self._game_from_parts(parts)
+                if game["gameNumber"] in seen_game_numbers:
+                    continue
+                seen_game_numbers.add(game["gameNumber"])
+                stored_name = game["white"] if white_matches else game["black"]
+                if stored_name:
+                    name_counts[stored_name] = name_counts.get(stored_name, 0) + 1
+                games.append(game)
+
+        # The name most often stored beside this identifier is the display name.
+        selected_player = max(name_counts, key=name_counts.get) if name_counts else None
+        advanced = examined if examined > 0 else len(games)
+        next_cursor = offset + advanced if advanced and offset + advanced < total else None
+        return {
+            "total": total,
+            "games": games,
+            "candidates": [],
+            "requiresPlayerChoice": False,
+            "playerNotFound": total == 0,
+            "selectedPlayer": selected_player,
+            "fideId": fide_id,
             "nextCursor": next_cursor,
         }
 
@@ -361,15 +448,13 @@ class NativeHost:
             player = payload.get("player")
             if not isinstance(player, str) or not player.strip() or len(player) > MAX_PLAYER_LENGTH:
                 raise HostError("INVALID_PLAYER", "Enter a valid player name.")
-            limit = payload.get("limit", 100)
-            cursor = payload.get("cursor", 0)
-            if cursor is None:
-                cursor = 0
-            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_RESULTS:
-                raise HostError("INVALID_LIMIT", "The result limit is invalid.")
-            if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0:
-                raise HostError("INVALID_CURSOR", "The result cursor is invalid.")
+            cursor, limit = self._page_bounds(payload)
             response = self._adapter().search_player(player.strip(), cursor, limit)
+        elif command == "searchFideId":
+            self._reject_unknown_fields(payload, {"fideId", "limit", "cursor"})
+            fide_id = _normalize_fide_id(payload.get("fideId"))
+            cursor, limit = self._page_bounds(payload)
+            response = self._adapter().search_fide_id(fide_id, cursor, limit)
         elif command == "getPgn":
             self._reject_unknown_fields(payload, {"gameNumbers"})
             game_numbers = payload.get("gameNumbers")
@@ -412,6 +497,18 @@ class NativeHost:
             "ok": True,
             **response,
         }
+
+    @staticmethod
+    def _page_bounds(payload: Dict[str, Any]) -> Tuple[int, int]:
+        limit = payload.get("limit", 100)
+        cursor = payload.get("cursor", 0)
+        if cursor is None:
+            cursor = 0
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_RESULTS:
+            raise HostError("INVALID_LIMIT", "The result limit is invalid.")
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= MAX_SEARCH_CURSOR:
+            raise HostError("INVALID_CURSOR", "The result cursor is invalid.")
+        return cursor, limit
 
     @staticmethod
     def _reject_unknown_fields(value: Dict[str, Any], allowed: set) -> None:

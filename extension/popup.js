@@ -1,5 +1,6 @@
 const EXPORT_REQUEST_SIZE = 200;
 const MAX_TOTAL_PGN_BYTES = 20 * 1024 * 1024;
+const SEARCH_PAGE_SIZE = 100;
 
 const elements = {
   hostBadge: document.querySelector("#hostBadge"),
@@ -26,6 +27,10 @@ const elements = {
 const state = {
   ready: false,
   busy: false,
+  // The active search as classified by ChessGenieQuery. "Load more" reuses
+  // this object, so a FIDE-ID search keeps paging by ID.
+  query: null,
+  // The stored player name shown in results and used for file names.
   player: "",
   total: 0,
   nextCursor: null,
@@ -91,7 +96,7 @@ function renderCandidates(candidates) {
     button.textContent = `${candidate.name} (${candidate.frequency})`;
     button.addEventListener("click", () => {
       elements.player.value = candidate.name;
-      void searchPlayer(candidate.name, false);
+      void runSearch({ kind: "player", player: candidate.name }, false);
     });
     elements.candidates.append(button);
   }
@@ -171,31 +176,50 @@ async function refreshStatus() {
   elements.search.disabled = state.busy || !state.ready;
 }
 
-async function searchPlayer(player, append) {
+function searchRequest(query, cursor) {
+  if (query.kind === "fideId") {
+    return ["searchFideId", { fideId: query.fideId, limit: SEARCH_PAGE_SIZE, cursor }];
+  }
+  return ["searchPlayer", { player: query.player, limit: SEARCH_PAGE_SIZE, cursor }];
+}
+
+function resultLabel() {
+  const query = state.query;
+  const fallback = ChessGenieQuery.label(query);
+  if (query.kind === "fideId" && state.player && state.player !== fallback) {
+    return `${state.player} (FIDE ID ${query.fideId})`;
+  }
+  return state.player || fallback;
+}
+
+function submitSearch(rawValue) {
   if (!state.ready || state.busy) return;
-  const trimmed = player.trim();
-  if (!trimmed) {
-    setStatus("Enter a player name.");
+  const query = ChessGenieQuery.classify(rawValue);
+  if (query.kind !== "player" && query.kind !== "fideId") {
+    setStatus(ChessGenieQuery.validationMessage(query));
     return;
   }
+  void runSearch(query, false);
+}
+
+async function runSearch(query, append) {
+  if (!state.ready || state.busy) return;
 
   if (!append) {
     resetResults();
     renderCandidates([]);
-    state.player = trimmed;
+    state.query = query;
+    state.player = "";
   }
 
   setBusy(true);
-  setStatus(append ? "Loading more games…" : "Searching the local database…");
+  setStatus(append ? "Loading more games…" : ChessGenieQuery.searchingMessage(query));
   try {
-    const response = await nativeRequest("searchPlayer", {
-      player: trimmed,
-      limit: 100,
-      cursor: append ? state.nextCursor : 0
-    });
+    const [command, payload] = searchRequest(query, append ? state.nextCursor : 0);
+    const response = await nativeRequest(command, payload);
 
     if (response.playerNotFound) {
-      setStatus("No matching player name was found.");
+      setStatus(ChessGenieQuery.notFoundMessage(query));
       return;
     }
     if (response.requiresPlayerChoice) {
@@ -205,13 +229,17 @@ async function searchPlayer(player, append) {
     }
 
     renderCandidates([]);
-    state.player = response.selectedPlayer ?? trimmed;
+    if (!state.player) {
+      state.player = response.selectedPlayer ?? ChessGenieQuery.label(query);
+    }
     state.total = response.total ?? 0;
     state.nextCursor = response.nextCursor ?? null;
     appendGames(response.games ?? []);
     elements.loadMore.classList.toggle("hidden", state.nextCursor === null);
-    setStatus(`Showing ${state.games.length} of ${state.total} games for ${state.player}.`);
-    await chrome.storage.local.set({ player: state.player });
+    setStatus(`Showing ${state.games.length} of ${state.total} games for ${resultLabel()}.`);
+    await chrome.storage.local.set({
+      player: query.kind === "fideId" ? query.fideId : state.player
+    });
   } catch (error) {
     setStatus(error.message);
   } finally {
@@ -294,11 +322,11 @@ elements.settingsForm.addEventListener("submit", async (event) => {
 
 elements.searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  void searchPlayer(elements.player.value, false);
+  submitSearch(elements.player.value);
 });
 
 elements.loadMore.addEventListener("click", () => {
-  if (state.nextCursor !== null) void searchPlayer(state.player, true);
+  if (state.nextCursor !== null && state.query) void runSearch(state.query, true);
 });
 
 elements.selectAll.addEventListener("click", () => {

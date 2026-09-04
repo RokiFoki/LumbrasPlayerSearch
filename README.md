@@ -170,11 +170,23 @@ For example:
 
 ### 1. Install Scid 5.2 for Windows
 
-Download the Windows build from the official
-[Scid 5.2 download page](https://sourceforge.net/projects/scid/files/Scid/Scid%205.2/)
-and install or unpack it. Locate the executable that runs a Tcl script — the
-one that accepts `scid script.tcl args`, usually `scid.exe` in the Scid program
-folder. You will enter its full path when configuring the extension.
+Download the Windows x64 build from the official
+[Scid 5.2 download page](https://sourceforge.net/projects/scid/files/Scid/Scid%205.2/).
+This is **Scid**, not the separate *Scid vs. PC* program — only Scid 5.2 reads
+the `.si5`/`.sg5`/`.sn5` database this extension uses.
+
+The download is a `.zip`. Extract it to a permanent location (not a temporary
+folder), because the extension launches this executable on every search. For a
+download named `scid-v5.2.202603_windows_x64.zip` the executable lands at:
+
+```text
+scid-v5.2.202603_windows_x64\scid_windows_x64\bin\scid.exe
+```
+
+`scid.exe` is the executable that runs a Tcl script (`scid script.tcl args`),
+exactly as `Scid.app/Contents/scid/scid` does on macOS. Note its full path — you
+will enter it when configuring the extension. Windows SmartScreen may warn the
+first time you run Scid; if it does, allow it (**More info → Run anyway**).
 
 ### 2. Install Python 3
 
@@ -216,13 +228,15 @@ reopen it.
 
 1. Open Chrome's extensions menu and select **Lumbras & Chess Genie**.
 2. Expand **Local database settings**.
-3. Enter the full path to the Scid executable, for example:
+3. Enter the full path to the Scid executable from step 1, for example:
 
    ```text
-   C:\Program Files\Scid\scid.exe
+   C:\Users\you\Scid\scid-v5.2.202603_windows_x64\scid_windows_x64\bin\scid.exe
    ```
 
-4. Enter the database base path without `.si5`, `.sg5`, or `.sn5`, for example:
+4. Enter the database base path without `.si5`, `.sg5`, or `.sn5`. For files
+   named `DatabaseName.si5`, `DatabaseName.sg5`, and `DatabaseName.sn5` in
+   `C:\Users\you\ChessDatabases`, enter:
 
    ```text
    C:\Users\you\ChessDatabases\DatabaseName

@@ -36,7 +36,7 @@ Searching by FIDE ID uses the `WhiteFideId` and `BlackFideId` PGN tags stored
 with each game. Games that were imported without those tags can only be found
 by player name.
 
-## Requirements
+## Requirements (macOS)
 
 - macOS
 - Google Chrome
@@ -47,33 +47,40 @@ by player name.
 The official Scid application includes the Tcl/Tk runtime used by the helper;
 no separate Tcl installation is required.
 
-## Windows and Linux
+## Requirements (Windows)
 
-The extension does not work on Windows or Linux yet, and there is no installer
-for either. Do not install Scid and a database expecting it to run.
+- Windows 10 or 11
+- Google Chrome
+- Scid 5.2 for Windows, installed so its console executable can run a Tcl
+  script (the executable that accepts `scid script.tcl args`, typically
+  `scid.exe` in the Scid program folder)
+- Python 3 on `PATH` (confirm with `py -3 --version` or `python --version`)
+- A readable Scid 5 database containing `.si5`, `.sg5`, and `.sn5` files
 
-The extension itself loads in Chrome on any platform, but it is only a front end
-for the native helper, and the helper refuses to run anywhere except macOS. It
-opens the database through `/usr/bin/sandbox-exec` with writes to the database
-directory denied, and fails closed rather than querying without that protection.
-On another platform every search returns:
+The Scid application supplies its own Tcl/Tk runtime, so no separate Tcl
+installation is required. The same four Tcl scripts run unchanged on Windows and
+macOS.
 
-```text
-This build currently supports enforced read-only access on macOS only.
-```
+### How read-only access is enforced on Windows
 
-Windows support needs three things that do not exist yet:
+This project does not rely on Scid's own `sc_base isReadOnly` flag alone to keep
+the database immutable. On macOS it runs Scid inside `sandbox-exec` with writes
+to the database directory denied by the operating system. On Windows it runs
+Scid at **Low integrity level** using Windows Mandatory Integrity Control: a
+Low-integrity process can read ordinary files but cannot write them, which is
+the direct analogue of the macOS deny-write. Scid is given a dedicated,
+Low-integrity scratch directory for its temporary files; the database directory
+is never made writable. If the low-integrity sandbox cannot be prepared, the
+helper fails closed and refuses to query rather than running without enforced
+read-only access. No third-party dependency is used — only the Python standard
+library and the built-in Windows API.
 
-- registration under `HKCU\Software\Google\Chrome\NativeMessagingHosts`,
-  instead of the per-user manifest directory used by macOS;
-- a launcher for the helper, since `native-host/launch.sh` is a shell script,
-  and a Python 3 interpreter on `PATH`, since macOS relies on
-  `/usr/bin/python3`;
-- an enforced read-only mechanism equivalent to the macOS sandbox.
+## Linux
 
-The third is the real blocker. Scid's own `sc_base isReadOnly` check already
-runs on every platform, but this project deliberately does not rely on the
-database application alone to keep the database immutable.
+Linux is not supported. The extension loads in Chrome on any platform, but the
+native helper only implements the enforced read-only launch on macOS and
+Windows, and fails closed elsewhere. Installing Scid and a database on Linux
+will not make it run.
 
 ## Installation (macOS)
 
@@ -159,6 +166,70 @@ For example:
 
 5. Click **Save and verify**. The status badge should display **Ready**.
 
+## Installation (Windows)
+
+### 1. Install Scid 5.2 for Windows
+
+Download the Windows build from the official
+[Scid 5.2 download page](https://sourceforge.net/projects/scid/files/Scid/Scid%205.2/)
+and install or unpack it. Locate the executable that runs a Tcl script — the
+one that accepts `scid script.tcl args`, usually `scid.exe` in the Scid program
+folder. You will enter its full path when configuring the extension.
+
+### 2. Install Python 3
+
+Install Python 3 from the
+[official downloads](https://www.python.org/downloads/windows/) and make sure it
+is on `PATH`. Confirm it:
+
+```bash
+py -3 --version
+```
+
+### 3. Load the Chrome extension
+
+1. Open `chrome://extensions` in Chrome.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the `extension` directory from this repository.
+5. Copy the 32-character extension ID displayed by Chrome.
+
+### 4. Install the native helper
+
+From the repository root, run in PowerShell:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 YOUR_EXTENSION_ID
+```
+
+Replace `YOUR_EXTENSION_ID` with the ID copied from `chrome://extensions`. The
+script copies the helper to `%LOCALAPPDATA%\LumbrasChessGenie\native-host`
+(outside the repository, so moving the repository does not break it), renders
+the native-messaging manifest, and registers it under
+`HKCU\Software\Google\Chrome\NativeMessagingHosts`. It does not install Scid or
+a chess database.
+
+Fully quit Chrome — close every window, including any background apps — then
+reopen it.
+
+### 5. Configure the extension
+
+1. Open Chrome's extensions menu and select **Lumbras & Chess Genie**.
+2. Expand **Local database settings**.
+3. Enter the full path to the Scid executable, for example:
+
+   ```text
+   C:\Program Files\Scid\scid.exe
+   ```
+
+4. Enter the database base path without `.si5`, `.sg5`, or `.sn5`, for example:
+
+   ```text
+   C:\Users\you\ChessDatabases\DatabaseName
+   ```
+
+5. Click **Save and verify**. The status badge should display **Ready**.
+
 ## Usage
 
 1. Open the extension.
@@ -215,23 +286,32 @@ to any website.
 
 ## Troubleshooting
 
-- **Helper unavailable:** rerun `scripts/install-macos.sh` with the extension ID
-  currently shown by Chrome, then quit and reopen Chrome.
+- **Helper unavailable:** rerun the installer for your platform
+  (`scripts/install-macos.sh` or `scripts\install-windows.ps1`) with the
+  extension ID currently shown by Chrome, then quit and reopen Chrome.
 - **Native host has exited:** reinstall the helper, restart Chrome, and click
   **Save and verify** again.
 - **Database incomplete or unreadable:** make sure the `.si5`, `.sg5`, and
   `.sn5` files are together and use their shared path without an extension.
-- **Scid executable not found:** verify that
-  `/Applications/Scid.app/Contents/scid/scid` exists and is executable.
-- **Database on Desktop:** move the complete database directory to a location
-  such as `~/ChessDatabases` and update the configured base path.
+- **Scid executable not found:** on macOS verify that
+  `/Applications/Scid.app/Contents/scid/scid` exists and is executable; on
+  Windows verify the full path to the Scid executable you entered.
+- **Read-only sandbox unavailable (Windows):** the helper failed to launch Scid
+  at Low integrity and refused to query. Make sure Scid and the database live on
+  a normal local NTFS drive; some removable or network volumes do not support
+  the integrity labels the sandbox relies on.
+- **Python 3 not found (Windows):** ensure `py -3 --version` or
+  `python --version` reports Python 3 from a normal Command Prompt, then reopen
+  Chrome so it picks up the current `PATH`.
 - **No games for a FIDE ID:** confirm the complete ID and that the games in the
   database carry `WhiteFideId`/`BlackFideId` tags; otherwise search by name.
 
 ## Updating or uninstalling
 
 After updating the repository, rerun the installer so the installed native
-helper receives the latest files:
+helper receives the latest files.
+
+On macOS:
 
 ```bash
 scripts/install-macos.sh YOUR_EXTENSION_ID
@@ -244,6 +324,20 @@ scripts/uninstall-macos.sh
 ```
 
 Add `--remove-config` to also remove the saved Scid and database paths.
+
+On Windows, rerun the installer to update:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 YOUR_EXTENSION_ID
+```
+
+To remove the native helper and its Chrome registration:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\uninstall-windows.ps1
+```
+
+Add `-RemoveConfig` to also remove the saved Scid and database paths.
 
 ## Development
 

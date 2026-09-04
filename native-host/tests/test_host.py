@@ -2,6 +2,7 @@ import io
 import json
 import os
 import pathlib
+import platform
 import stat
 import struct
 import sys
@@ -170,7 +171,11 @@ class HostTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["ready"])
         self.assertEqual(response["databaseBase"], str(self.database.resolve()))
-        self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
+        # The saved config is restricted to the user on POSIX; Windows has no
+        # equivalent file mode, so the restriction is asserted only where it
+        # applies.
+        if platform.system() != "Windows":
+            self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
 
     def test_incomplete_database_is_rejected(self):
         pathlib.Path(str(self.database) + ".sn5").unlink()

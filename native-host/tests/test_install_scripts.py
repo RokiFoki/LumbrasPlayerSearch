@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import platform
 import struct
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ UNINSTALLER = REPOSITORY / "scripts" / "uninstall-macos.sh"
 EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop"
 
 
+@unittest.skipUnless(platform.system() == "Darwin", "macOS install scripts run on macOS only")
 class MacosInstallScriptTests(unittest.TestCase):
     def test_installs_runnable_host_outside_repository_and_uninstalls_it(self):
         with tempfile.TemporaryDirectory() as temporary_home:

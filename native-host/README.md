@@ -30,12 +30,31 @@ The implemented Python host uses only the Python standard library. It provides:
 - bounded selected-game PGN export;
 - timeouts and stable safe error codes.
 
-On macOS, every Scid child process runs through `/usr/bin/sandbox-exec` with
-writes denied to the database directory. The Tcl adapter additionally refuses
-to continue unless Scid reports `sc_base isReadOnly` as true. Other platforms
-fail closed until an equivalent enforced read-only mechanism is implemented.
+Enforced read-only access is platform-specific, but everything else — request
+framing, validation, dispatch, the search logic, timeouts, and the response cap
+— is shared:
 
-## Development registration
+- **macOS:** every Scid child process runs through `/usr/bin/sandbox-exec` with
+  writes denied to the database directory.
+- **Windows:** every Scid child process runs at **Low integrity level** through
+  the Win32 API (`CreateProcessAsUserW` with the process token lowered to the
+  Low mandatory-integrity SID). A Low-integrity process can read ordinary files
+  but cannot write them, so the database directory is immutable to it. Scid is
+  given a dedicated Low-integrity scratch directory for its temporary files; the
+  database directory is never made writable. Only the Python standard library
+  and the built-in Windows API are used.
+
+On both platforms the Tcl adapter additionally refuses to continue unless Scid
+reports `sc_base isReadOnly` as true. If the platform sandbox cannot be prepared
+(or the platform is neither macOS nor Windows) the helper fails closed and
+returns `READ_ONLY_UNAVAILABLE` rather than querying without enforced read-only
+access.
+
+`native-host/proof/run-readonly-proof.sh` (macOS) and
+`native-host/proof/run-readonly-proof-windows.py` (Windows) run a real query and
+prove the database files are byte-for-byte unchanged.
+
+## Development registration (macOS)
 
 1. Load `extension/` as an unpacked Chrome extension.
 2. Copy its 32-character extension ID.
@@ -60,3 +79,38 @@ It then writes Chrome's per-user registration manifest:
 
 Run `scripts/uninstall-macos.sh` to remove the installed helper and manifest.
 Add `--remove-config` to also remove the saved local paths.
+
+## Development registration (Windows)
+
+1. Load `extension/` as an unpacked Chrome extension.
+2. Copy its 32-character extension ID.
+3. Run `powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 EXTENSION_ID`.
+4. Fully quit and reopen Chrome.
+5. In the popup, enter the full path to the Scid executable and the common
+   database base path without its extension.
+
+Chrome finds a native host on Windows through the registry rather than a
+manifest directory. The installer copies a private helper outside the
+repository:
+
+```text
+%LOCALAPPDATA%\LumbrasChessGenie\native-host\
+```
+
+renders the manifest next to it with the same
+`scripts/render-native-manifest.py` used on macOS:
+
+```text
+%LOCALAPPDATA%\LumbrasChessGenie\app.chessgenie.local_games.json
+```
+
+and points Chrome at that manifest with a registry value whose default data is
+the manifest's absolute path:
+
+```text
+HKCU\Software\Google\Chrome\NativeMessagingHosts\app.chessgenie.local_games
+```
+
+Run `powershell -ExecutionPolicy Bypass -File scripts\uninstall-windows.ps1` to
+remove the installed helper, manifest, and registry value. Add `-RemoveConfig`
+to also remove the saved local paths.

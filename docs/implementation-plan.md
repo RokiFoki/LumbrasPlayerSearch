@@ -5,8 +5,10 @@
 - Local database during development:
   `$HOME/ChessDatabases/LumbrasGigabase_OTB_si5/LumbrasGigaBase_OTB.{si5,sg5,sn5}`
 - Standalone open-source repository: `$HOME/Desktop/LubrasChessGenie`
-- Installed native helper:
+- Installed native helper (macOS):
   `$HOME/Library/Application Support/LubrasChessGenie/native-host`
+- Installed native helper (Windows):
+  `%LOCALAPPDATA%\LumbrasChessGenie\native-host`
 - ChessGenie source remains separate and does not receive local database code,
   extension detection, or an extension messaging bridge.
 
@@ -41,7 +43,14 @@
 - [x] Build per-user macOS install/uninstall scripts with explicit execution.
 - [x] Install the runnable helper outside macOS-protected Desktop and Documents
   folders.
-- [ ] Create Windows native-host registration and enforced read-only access.
+- [x] Create Windows native-host registration and enforced read-only access.
+  `scripts/install-windows.ps1` copies the helper to
+  `%LOCALAPPDATA%\LumbrasChessGenie\native-host`, renders the manifest with the
+  shared `render-native-manifest.py`, and registers it under
+  `HKCU\Software\Google\Chrome\NativeMessagingHosts`. Read-only access is
+  enforced by launching Scid at Low integrity level (Windows Mandatory
+  Integrity Control), the analogue of the macOS sandbox deny-write;
+  `host.py._run()` fails closed if the low-integrity sandbox is unavailable.
 - [ ] Decide whether to discover a user-installed Scid or bundle a component.
 - [ ] If bundling Scid, satisfy GPL notice/source obligations.
 - [ ] Sign/notarize macOS artifacts and sign Windows artifacts.

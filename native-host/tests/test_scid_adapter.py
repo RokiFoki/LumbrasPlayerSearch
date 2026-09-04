@@ -1,5 +1,6 @@
 import base64
 import pathlib
+import platform
 import sys
 import unittest
 from unittest import mock
@@ -355,6 +356,7 @@ class ScidAdapterParsingTests(unittest.TestCase):
             result = self.adapter.export_games([42])
         self.assertEqual(result, [{"gameNumber": 42, "pgn": pgn}])
 
+    @unittest.skipUnless(platform.system() == "Darwin", "sandbox-exec profile is macOS only")
     def test_sandbox_denies_writes_to_database_directory(self):
         profile = self.adapter._sandbox_profile()
         self.assertIn("deny file-write", profile)

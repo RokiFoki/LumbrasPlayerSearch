@@ -26,9 +26,10 @@ searches take longer than name searches because every game's tags are scanned
 rather than the name index.
 
 Chrome Native Messaging requires an operating-system host manifest whose
-`allowed_origins` entry contains the installed extension ID. Use
-`scripts/install-macos.sh` from the repository root to install and register the
-native helper for the current user.
+`allowed_origins` entry contains the installed extension ID. From the repository
+root, use `scripts/install-macos.sh` on macOS, or
+`scripts\install-windows.ps1` on Windows, to install and register the native
+helper for the current user.
 
 See the repository's main `README.md` for complete requirements, installation,
 configuration, and usage instructions.

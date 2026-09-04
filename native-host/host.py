@@ -161,7 +161,14 @@ class ConfigStore:
             prefix="config.", suffix=".tmp", dir=str(self.path.parent)
         )
         try:
-            os.fchmod(descriptor, 0o600)
+            # POSIX keeps the saved paths private to the user. Windows has no
+            # equivalent file mode and lacks os.fchmod before Python 3.13, so
+            # the restriction is applied only where it is meaningful.
+            if hasattr(os, "fchmod"):
+                try:
+                    os.fchmod(descriptor, 0o600)
+                except (OSError, NotImplementedError):
+                    pass
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2, sort_keys=True)
                 handle.write("\n")
@@ -183,6 +190,362 @@ def _decode_field(value: str) -> str:
         raise HostError("SCID_OUTPUT_INVALID", "Scid returned invalid data.") from error
 
 
+# ---------------------------------------------------------------------------
+# Windows enforced read-only launch.
+#
+# macOS denies writes to the database directory through sandbox-exec. Windows
+# has no such per-path deny, but it does have Mandatory Integrity Control: a
+# process launched at Low integrity can read ordinary (Medium) files yet cannot
+# write them. Running Scid at Low integrity is therefore the direct analogue of
+# the macOS deny-write, and it needs no third-party dependency -- only the
+# standard library through ctypes and the Win32 API.
+#
+# The token is duplicated from this host's own token and merely *lowered* to the
+# Low integrity SID (S-1-16-4096). Lowering the caller's own token to an equal
+# or lower level does not require SeAssignPrimaryTokenPrivilege, so a normal
+# interactive user can launch the child. Scid still needs somewhere writable for
+# its temporary files, so it is given a dedicated scratch directory whose own
+# integrity label is set to Low; the database directory is never made writable.
+# ---------------------------------------------------------------------------
+
+if platform.system() == "Windows":
+    import ctypes
+    import shutil
+    import threading
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+    _LOW_INTEGRITY_SID = "S-1-16-4096"
+
+    _TOKEN_DUPLICATE = 0x0002
+    _TOKEN_QUERY = 0x0008
+    _TOKEN_ASSIGN_PRIMARY = 0x0001
+    _TOKEN_ADJUST_DEFAULT = 0x0080
+    _TOKEN_ADJUST_SESSIONID = 0x0100
+    _MAXIMUM_ALLOWED = 0x02000000
+
+    _SecurityImpersonation = 2
+    _TokenPrimary = 1
+    _TokenIntegrityLevel = 25
+    _SE_GROUP_INTEGRITY = 0x00000020
+
+    _STARTF_USESTDHANDLES = 0x00000100
+    _CREATE_NO_WINDOW = 0x08000000
+    _CREATE_UNICODE_ENVIRONMENT = 0x00000400
+    _HANDLE_FLAG_INHERIT = 0x00000001
+    _WAIT_TIMEOUT = 0x00000102
+    _INFINITE = 0xFFFFFFFF
+
+    _LABEL_SECURITY_INFORMATION = 0x00000010
+    _SE_FILE_OBJECT = 1
+    _SDDL_REVISION_1 = 1
+
+    _GENERIC_READ = 0x80000000
+    _FILE_SHARE_READ = 0x00000001
+    _FILE_SHARE_WRITE = 0x00000002
+    _OPEN_EXISTING = 3
+
+    class _STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.POINTER(ctypes.c_byte)),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class _PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    class _SECURITY_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", wintypes.LPVOID),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    class _SID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Sid", wintypes.LPVOID), ("Attributes", wintypes.DWORD)]
+
+    class _TOKEN_MANDATORY_LABEL(ctypes.Structure):
+        _fields_ = [("Label", _SID_AND_ATTRIBUTES)]
+
+    def _win_check(result, func, arguments):
+        if not result:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return result
+
+    _advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+    ]
+    _advapi32.OpenProcessToken.errcheck = _win_check
+    _advapi32.DuplicateTokenEx.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(_SECURITY_ATTRIBUTES),
+        ctypes.c_int, ctypes.c_int, ctypes.POINTER(wintypes.HANDLE),
+    ]
+    _advapi32.DuplicateTokenEx.errcheck = _win_check
+    _advapi32.SetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD
+    ]
+    _advapi32.SetTokenInformation.errcheck = _win_check
+    _advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID)
+    ]
+    _advapi32.ConvertStringSidToSidW.errcheck = _win_check
+    _advapi32.CreateProcessAsUserW.argtypes = [
+        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPWSTR,
+        ctypes.POINTER(_SECURITY_ATTRIBUTES), ctypes.POINTER(_SECURITY_ATTRIBUTES),
+        wintypes.BOOL, wintypes.DWORD, wintypes.LPVOID, wintypes.LPCWSTR,
+        ctypes.POINTER(_STARTUPINFOW), ctypes.POINTER(_PROCESS_INFORMATION),
+    ]
+    _advapi32.CreateProcessAsUserW.errcheck = _win_check
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.ULONG),
+    ]
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.errcheck = _win_check
+    _advapi32.GetSecurityDescriptorSacl.argtypes = [
+        wintypes.LPVOID, ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.BOOL),
+    ]
+    _advapi32.GetSecurityDescriptorSacl.errcheck = _win_check
+    _advapi32.SetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+        wintypes.LPVOID, wintypes.LPVOID, wintypes.LPVOID, wintypes.LPVOID,
+    ]
+
+    _kernel32.CreatePipe.argtypes = [
+        ctypes.POINTER(wintypes.HANDLE), ctypes.POINTER(wintypes.HANDLE),
+        ctypes.POINTER(_SECURITY_ATTRIBUTES), wintypes.DWORD,
+    ]
+    _kernel32.CreatePipe.errcheck = _win_check
+    _kernel32.SetHandleInformation.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD
+    ]
+    _kernel32.SetHandleInformation.errcheck = _win_check
+    _kernel32.ReadFile.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    ]
+    _kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.POINTER(_SECURITY_ATTRIBUTES),
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    _kernel32.CreateFileW.restype = wintypes.HANDLE
+    _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    _kernel32.GetExitCodeProcess.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)
+    ]
+    _kernel32.GetExitCodeProcess.errcheck = _win_check
+    _kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _kernel32.LocalFree.argtypes = [wintypes.HANDLE]
+
+    def _label_directory_low(path: str) -> None:
+        """Set a directory's mandatory label to Low so a Low-IL child may write it.
+
+        Object and container inheritance ("OICI") makes files Scid creates in the
+        scratch directory Low as well, so writing them is never a write-up.
+        """
+        descriptor = wintypes.LPVOID()
+        _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            "S:(ML;OICI;NW;;;LW)", _SDDL_REVISION_1, ctypes.byref(descriptor), None
+        )
+        try:
+            present = wintypes.BOOL()
+            sacl = wintypes.LPVOID()
+            defaulted = wintypes.BOOL()
+            _advapi32.GetSecurityDescriptorSacl(
+                descriptor, ctypes.byref(present), ctypes.byref(sacl), ctypes.byref(defaulted)
+            )
+            error = _advapi32.SetNamedSecurityInfoW(
+                path, _SE_FILE_OBJECT, _LABEL_SECURITY_INFORMATION,
+                None, None, None, sacl,
+            )
+            if error != 0:
+                raise ctypes.WinError(error)
+        finally:
+            _kernel32.LocalFree(descriptor)
+
+    def _create_low_integrity_token() -> "wintypes.HANDLE":
+        """Duplicate this process's token and lower it to Low integrity."""
+        process_token = wintypes.HANDLE()
+        _advapi32.OpenProcessToken(
+            _kernel32.GetCurrentProcess(),
+            _TOKEN_DUPLICATE | _TOKEN_QUERY | _TOKEN_ASSIGN_PRIMARY
+            | _TOKEN_ADJUST_DEFAULT | _TOKEN_ADJUST_SESSIONID,
+            ctypes.byref(process_token),
+        )
+        try:
+            low_token = wintypes.HANDLE()
+            _advapi32.DuplicateTokenEx(
+                process_token, _MAXIMUM_ALLOWED, None,
+                _SecurityImpersonation, _TokenPrimary, ctypes.byref(low_token),
+            )
+        finally:
+            _kernel32.CloseHandle(process_token)
+
+        try:
+            low_sid = wintypes.LPVOID()
+            _advapi32.ConvertStringSidToSidW(_LOW_INTEGRITY_SID, ctypes.byref(low_sid))
+            try:
+                label = _TOKEN_MANDATORY_LABEL()
+                label.Label.Sid = low_sid
+                label.Label.Attributes = _SE_GROUP_INTEGRITY
+                _advapi32.SetTokenInformation(
+                    low_token, _TokenIntegrityLevel, ctypes.byref(label), ctypes.sizeof(label)
+                )
+            finally:
+                _kernel32.LocalFree(low_sid)
+        except OSError:
+            # Never leak the duplicated token if lowering it failed; the caller
+            # will fail closed on the raised error.
+            _kernel32.CloseHandle(low_token)
+            raise
+        return low_token
+
+    def _build_environment_block(overrides: Dict[str, str]) -> "ctypes.Array":
+        environment = os.environ.copy()
+        environment.update(overrides)
+        block = "".join("{}={}\0".format(key, value) for key, value in environment.items()) + "\0"
+        return ctypes.create_unicode_buffer(block)
+
+    def _run_scid_low_integrity(
+        application_name: str,
+        command: Sequence[str],
+        cwd: str,
+        env_overrides: Dict[str, str],
+        timeout_seconds: int,
+    ) -> Tuple[int, str, str]:
+        """Run Scid at Low integrity, capturing stdout/stderr; raise HostError on failure.
+
+        A failure to build the lowered token or to label the scratch directory
+        means the read-only sandbox is unavailable, so the caller fails closed
+        rather than querying without it.
+        """
+        try:
+            low_token = _create_low_integrity_token()
+        except OSError as error:
+            raise HostError(
+                "READ_ONLY_UNAVAILABLE",
+                "The Windows low-integrity sandbox could not be prepared.",
+            ) from error
+
+        security = _SECURITY_ATTRIBUTES()
+        security.nLength = ctypes.sizeof(security)
+        security.bInheritHandle = True
+        security.lpSecurityDescriptor = None
+
+        def make_pipe() -> Tuple["wintypes.HANDLE", "wintypes.HANDLE"]:
+            read_end = wintypes.HANDLE()
+            write_end = wintypes.HANDLE()
+            _kernel32.CreatePipe(
+                ctypes.byref(read_end), ctypes.byref(write_end), ctypes.byref(security), 0
+            )
+            _kernel32.SetHandleInformation(read_end, _HANDLE_FLAG_INHERIT, 0)
+            return read_end, write_end
+
+        out_read, out_write = make_pipe()
+        err_read, err_write = make_pipe()
+        nul = _kernel32.CreateFileW(
+            "NUL", _GENERIC_READ, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            ctypes.byref(security), _OPEN_EXISTING, 0, None,
+        )
+
+        startup = _STARTUPINFOW()
+        startup.cb = ctypes.sizeof(startup)
+        startup.dwFlags = _STARTF_USESTDHANDLES
+        startup.hStdInput = nul
+        startup.hStdOutput = out_write
+        startup.hStdError = err_write
+        information = _PROCESS_INFORMATION()
+
+        command_line = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(command)))
+        environment = _build_environment_block(env_overrides)
+
+        try:
+            _advapi32.CreateProcessAsUserW(
+                low_token, application_name, command_line, None, None, True,
+                _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT,
+                ctypes.cast(environment, wintypes.LPVOID), cwd,
+                ctypes.byref(startup), ctypes.byref(information),
+            )
+        except OSError as error:
+            for handle in (out_read, out_write, err_read, err_write, nul, low_token):
+                _kernel32.CloseHandle(handle)
+            raise HostError("SCID_START_FAILED", "Scid could not be started.") from error
+
+        _kernel32.CloseHandle(out_write)
+        _kernel32.CloseHandle(err_write)
+        _kernel32.CloseHandle(nul)
+        _kernel32.CloseHandle(low_token)
+
+        collected = {"out": [], "err": []}
+
+        def drain(handle: "wintypes.HANDLE", key: str) -> None:
+            buffer = ctypes.create_string_buffer(65536)
+            read = wintypes.DWORD()
+            while True:
+                ok = _kernel32.ReadFile(handle, buffer, len(buffer), ctypes.byref(read), None)
+                if not ok or read.value == 0:
+                    break
+                collected[key].append(buffer.raw[: read.value])
+            _kernel32.CloseHandle(handle)
+
+        threads = [
+            threading.Thread(target=drain, args=(out_read, "out")),
+            threading.Thread(target=drain, args=(err_read, "err")),
+        ]
+        for thread in threads:
+            thread.start()
+
+        timed_out = False
+        waited = _kernel32.WaitForSingleObject(
+            information.hProcess, int(timeout_seconds * 1000)
+        )
+        if waited == _WAIT_TIMEOUT:
+            timed_out = True
+            _kernel32.TerminateProcess(information.hProcess, 1)
+            _kernel32.WaitForSingleObject(information.hProcess, _INFINITE)
+        for thread in threads:
+            thread.join()
+
+        exit_code = wintypes.DWORD()
+        _kernel32.GetExitCodeProcess(information.hProcess, ctypes.byref(exit_code))
+        _kernel32.CloseHandle(information.hProcess)
+        _kernel32.CloseHandle(information.hThread)
+
+        if timed_out:
+            raise HostError("SCID_TIMEOUT", "The Scid operation timed out.")
+
+        stdout = b"".join(collected["out"]).decode("utf-8", "replace")
+        stderr = b"".join(collected["err"]).decode("utf-8", "replace")
+        return exit_code.value, stdout, stderr
+
+
 class ScidAdapter:
     def __init__(self, scid_executable: pathlib.Path, database_base: pathlib.Path) -> None:
         self.scid_executable = scid_executable
@@ -201,11 +564,47 @@ class ScidAdapter:
         )
 
     def _run(self, script_name: str, arguments: Sequence[str], timeout: int) -> str:
-        if platform.system() != "Darwin":
+        """Run a Scid Tcl script with enforced read-only access to the database.
+
+        The launch is platform-specific: macOS denies writes to the database
+        directory with sandbox-exec, Windows runs Scid at Low integrity. Every
+        other platform fails closed. The rest -- return-code and stderr mapping,
+        timeout and start-failure handling -- is shared.
+        """
+        script = self.script_directory / script_name
+        system = platform.system()
+        if system == "Darwin":
+            returncode, stdout, stderr = self._run_darwin(script, arguments, timeout)
+        elif system == "Windows":
+            returncode, stdout, stderr = self._run_windows(script, arguments, timeout)
+        else:
             raise HostError(
                 "READ_ONLY_UNAVAILABLE",
-                "This build currently supports enforced read-only access on macOS only.",
+                "This build supports enforced read-only access on macOS and Windows only.",
             )
+        return self._interpret(returncode, stdout, stderr)
+
+    @staticmethod
+    def _interpret(returncode: int, stdout: str, stderr: str) -> str:
+        if returncode != 0:
+            if "READ_ONLY_REQUIRED" in stderr:
+                raise HostError(
+                    "READ_ONLY_REQUIRED",
+                    "The database could not be opened with enforced read-only access.",
+                )
+            if "PGN_TOO_LARGE" in stderr or "EXPORT_TOO_LARGE" in stderr:
+                raise HostError(
+                    "PGN_TOO_LARGE",
+                    "One or more selected games are too large to export safely.",
+                )
+            if "INVALID_GAME_NUMBER" in stderr:
+                raise HostError("INVALID_GAMES", "One or more game numbers are invalid.")
+            raise HostError("SCID_FAILED", "Scid could not complete the requested operation.")
+        return stdout
+
+    def _run_darwin(
+        self, script: pathlib.Path, arguments: Sequence[str], timeout: int
+    ) -> Tuple[int, str, str]:
         sandbox = pathlib.Path("/usr/bin/sandbox-exec")
         if not sandbox.is_file():
             raise HostError(
@@ -213,7 +612,6 @@ class ScidAdapter:
                 "The macOS read-only sandbox is unavailable.",
             )
 
-        script = self.script_directory / script_name
         command = [
             str(sandbox),
             "-p",
@@ -239,22 +637,43 @@ class ScidAdapter:
             raise HostError("SCID_TIMEOUT", "The Scid operation timed out.") from error
         except OSError as error:
             raise HostError("SCID_START_FAILED", "Scid could not be started.") from error
+        return completed.returncode, completed.stdout, completed.stderr
 
-        if completed.returncode != 0:
-            if "READ_ONLY_REQUIRED" in completed.stderr:
+    def _run_windows(
+        self, script: pathlib.Path, arguments: Sequence[str], timeout: int
+    ) -> Tuple[int, str, str]:
+        command = [
+            str(self.scid_executable),
+            str(script),
+            str(self.database_base),
+            *arguments,
+        ]
+        # A dedicated Low-integrity scratch directory gives Scid somewhere to
+        # write its temporary files; the database directory is never made
+        # writable. It is created outside the database directory and removed
+        # afterwards. Preparing it is part of the sandbox, so any failure fails
+        # closed rather than querying without enforced read-only access.
+        try:
+            scratch = tempfile.mkdtemp(prefix="lubras-chess-genie-scratch.")
+        except OSError as error:
+            raise HostError(
+                "READ_ONLY_UNAVAILABLE",
+                "The Windows low-integrity sandbox could not be prepared.",
+            ) from error
+        try:
+            try:
+                _label_directory_low(scratch)
+            except OSError as error:
                 raise HostError(
-                    "READ_ONLY_REQUIRED",
-                    "The database could not be opened with enforced read-only access.",
-                )
-            if "PGN_TOO_LARGE" in completed.stderr or "EXPORT_TOO_LARGE" in completed.stderr:
-                raise HostError(
-                    "PGN_TOO_LARGE",
-                    "One or more selected games are too large to export safely.",
-                )
-            if "INVALID_GAME_NUMBER" in completed.stderr:
-                raise HostError("INVALID_GAMES", "One or more game numbers are invalid.")
-            raise HostError("SCID_FAILED", "Scid could not complete the requested operation.")
-        return completed.stdout
+                    "READ_ONLY_UNAVAILABLE",
+                    "The Windows low-integrity sandbox could not be prepared.",
+                ) from error
+            environment = {"TEMP": scratch, "TMP": scratch, "TMPDIR": scratch}
+            return _run_scid_low_integrity(
+                str(self.scid_executable), command, scratch, environment, timeout
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     @staticmethod
     def _parse_game_numbers(value: str) -> List[int]:

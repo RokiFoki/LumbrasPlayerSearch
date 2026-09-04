@@ -47,7 +47,35 @@ by player name.
 The official Scid application includes the Tcl/Tk runtime used by the helper;
 no separate Tcl installation is required.
 
-## Installation
+## Windows and Linux
+
+The extension does not work on Windows or Linux yet, and there is no installer
+for either. Do not install Scid and a database expecting it to run.
+
+The extension itself loads in Chrome on any platform, but it is only a front end
+for the native helper, and the helper refuses to run anywhere except macOS. It
+opens the database through `/usr/bin/sandbox-exec` with writes to the database
+directory denied, and fails closed rather than querying without that protection.
+On another platform every search returns:
+
+```text
+This build currently supports enforced read-only access on macOS only.
+```
+
+Windows support needs three things that do not exist yet:
+
+- registration under `HKCU\Software\Google\Chrome\NativeMessagingHosts`,
+  instead of the per-user manifest directory used by macOS;
+- a launcher for the helper, since `native-host/launch.sh` is a shell script,
+  and a Python 3 interpreter on `PATH`, since macOS relies on
+  `/usr/bin/python3`;
+- an enforced read-only mechanism equivalent to the macOS sandbox.
+
+The third is the real blocker. Scid's own `sc_base isReadOnly` check already
+runs on every platform, but this project deliberately does not rely on the
+database application alone to keep the database immutable.
+
+## Installation (macOS)
 
 ### 1. Install Scid
 
